@@ -5,6 +5,18 @@ import pyautogui
 import time
 import threading
 import random
+import os
+import re
+
+try:
+    import pytesseract
+    from PIL import Image
+    # Setting the path for Tesseract engine
+    tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    if os.path.exists(tesseract_path):
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+except ImportError:
+    pytesseract = None
 
 # Disable pyautogui fail-safe (move mouse to corner to abort) – optional safety
 pyautogui.FAILSAFE = True
@@ -27,6 +39,13 @@ class CopyBoxApp:
         self.current_y = 100
         self.base_width = 600
         self.min_width = 450
+        
+        # Initialize attributes for dragging and resizing to satisfy linter
+        self.start_x = 0
+        self.start_y = 0
+        self.resize_start_x = 0
+        self.resize_start_w = 0
+        
         self.root.geometry(f"{self.base_width}x110+{self.current_x}+{self.current_y}")
         
         # Make window background transparent for rounded corners effect
@@ -160,6 +179,8 @@ class CopyBoxApp:
             'entry': None,
             'coord_label': None,
             'color': box_color,
+            'scan_win': None,
+            'scan_mode': 'TD',
         }
         
         # Color indicator bar on the left
@@ -281,6 +302,27 @@ class CopyBoxApp:
         )
         copy_button.pack()
         
+        # --- Scan button (Moved here) ---
+        scan_button_frame = tk.Frame(
+            buttons_frame,
+            bg='#2196F3',
+            relief='flat',
+            padx=8,
+            pady=4
+        )
+        scan_button_frame.pack(side='left', padx=(3, 0))
+        
+        scan_button = tk.Label(
+            scan_button_frame,
+            text="scan",
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            cursor='hand2'
+        )
+        scan_button.pack()
+        scan_button.bind('<Button-1>', lambda e, pd=pin_data: self.open_scan_box(pd))
+        
         def copy_text(event, entry=search_entry, btn=copy_button, frm=copy_button_frame):
             text = entry.get()
             if text and text != "text here...":
@@ -301,8 +343,83 @@ class CopyBoxApp:
         copy_button.bind('<Button-1>', copy_text)
         
         def paste_text(event, entry=search_entry, pd=pin_data, btn=paste_button, frm=paste_button_frame):
-            text = entry.get()
-            if text and text != "text here..." and pd['pinned'] and pd['target_x'] is not None:
+            text_to_paste = entry.get()
+            scan_active = pd.get('scan_win') and pd['scan_win'].winfo_exists()
+            pinned_active = pd['pinned'] and pd['target_x'] is not None
+
+            if scan_active and pinned_active:
+                # --- SCAN & PASTE MODE ---
+                btn.config(text='scanning...')
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+                self.root.update()
+                
+                def do_scan_and_paste():
+                    scan_win = pd['scan_win']
+                    sx, sy = scan_win.winfo_rootx(), scan_win.winfo_rooty()
+                    sw, sh = scan_win.winfo_width(), scan_win.winfo_height()
+                    tx, ty = pd['target_x'], pd['target_y']
+                    
+                    # Hide windows for clear screenshot
+                    float_win = pd.get('float_win')
+                    if float_win and float_win.winfo_exists():
+                        self.root.after(0, float_win.withdraw)
+                    self.root.after(0, scan_win.withdraw)
+                    self.root.after(0, self.root.withdraw)
+                    time.sleep(0.4)
+                    
+                    scanned_text = ""
+                    try:
+                        # Take screenshot of the scan box area
+                        screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
+                        
+                        if pytesseract:
+                            # Perform OCR
+                            raw_text = pytesseract.image_to_string(screenshot)
+                            
+                            # Clean text based on mode
+                            mode = pd.get('scan_mode', 'TD')
+                            if mode == 'TD':
+                                # Keep only digits
+                                scanned_text = "".join(re.findall(r'\d+', raw_text))
+                            else: # PIN mode
+                                # convert dashes to dots then keep numbers and dots
+                                temp_text = raw_text.replace('-', '.')
+                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                        else:
+                            scanned_text = "ERROR: Install pytesseract"
+                            
+                        # Update the entry box with what we found
+                        final_text = scanned_text
+                        def update_entry():
+                            entry.delete(0, 'end')
+                            entry.insert(0, final_text)
+                            entry.config(fg='#333333')
+                        self.root.after(0, update_entry)
+                        
+                        # Click target and paste
+                        pyautogui.click(tx, ty)
+                        time.sleep(0.2)
+                        pyperclip.copy(final_text)
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.2)
+                        
+                    except Exception as e:
+                        print(f"OCR Error: {e}")
+                    
+                    # Restore windows
+                    self.root.after(0, self.root.deiconify)
+                    if float_win and float_win.winfo_exists():
+                        self.root.after(50, float_win.deiconify)
+                    if scan_win and scan_win.winfo_exists():
+                        self.root.after(50, scan_win.deiconify)
+                        
+                    self.root.after(500, lambda: reset_paste_btn(btn, frm))
+                    
+                threading.Thread(target=do_scan_and_paste, daemon=True).start()
+
+            elif text_to_paste and text_to_paste != "text here..." and pinned_active:
+                # --- NORMAL PASTE MODE ---
                 # Visual feedback
                 btn.config(text='pasting...')
                 frm.config(bg='#FF9800')
@@ -313,28 +430,23 @@ class CopyBoxApp:
                 def do_paste():
                     tx, ty = pd['target_x'], pd['target_y']
                     
-                    # Hide the floating pin and CopyBox so the click lands on the real app
+                    # Hide the floating pin and CopyBox
                     float_win = pd.get('float_win')
                     if float_win and float_win.winfo_exists():
                         self.root.after(0, float_win.withdraw)
                     self.root.after(0, self.root.withdraw)
-                    time.sleep(0.3)  # wait for windows to hide
+                    time.sleep(0.3)
                     
-                    # Click at the pinned location to focus it
                     pyautogui.click(tx, ty)
                     time.sleep(0.15)
-                    
-                    # Paste the text using clipboard
-                    pyperclip.copy(text)
+                    pyperclip.copy(text_to_paste)
                     pyautogui.hotkey('ctrl', 'v')
                     time.sleep(0.15)
                     
-                    # Show CopyBox and floating pin again
                     self.root.after(0, self.root.deiconify)
                     if float_win and float_win.winfo_exists():
                         self.root.after(50, float_win.deiconify)
                     
-                    # Reset button in main thread
                     self.root.after(500, lambda: reset_paste_btn(btn, frm))
                     
                 threading.Thread(target=do_paste, daemon=True).start()
@@ -384,6 +496,12 @@ class CopyBoxApp:
                 if pd.get('float_win'):
                     try:
                         pd['float_win'].destroy()
+                    except:
+                        pass
+                # Destroy scan win if it exists
+                if pd.get('scan_win'):
+                    try:
+                        pd['scan_win'].destroy()
                     except:
                         pass
                 b_frame.destroy()
@@ -526,6 +644,165 @@ class CopyBoxApp:
         
         canvas.bind('<Button-3>', on_right_click)
         
+    def open_scan_box(self, pin_data):
+        """Create a floating transparent box that can be moved and resized."""
+        # Toggle: If already exists, destroy it
+        if pin_data.get('scan_win') and pin_data['scan_win'].winfo_exists():
+            pin_data['scan_win'].destroy()
+            pin_data['scan_win'] = None
+            return
+
+        scan_win = tk.Toplevel(self.root)
+        pin_data['scan_win'] = scan_win
+        scan_win.overrideredirect(True)
+        scan_win.attributes('-topmost', True)
+        
+        # Make the box semi-transparent
+        scan_win.attributes('-alpha', 0.4)
+        
+        # Color comes from pin_data
+        box_color = pin_data['color']
+        scan_win.configure(bg=box_color)
+        
+        # Window size: Fixed size suitable for TD/PIN lines
+        win_w = 450
+        win_h = 80
+        
+        # Position it near the center of the screen
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        init_x = (screen_w // 2) - (win_w // 2)
+        init_y = (screen_h // 2) - (win_h // 2)
+        scan_win.geometry(f"{win_w}x{win_h}+{init_x}+{init_y}")
+        
+        # Container for the scan box content
+        content_frame = tk.Frame(scan_win, bg=box_color, highlightthickness=1, highlightbackground='white')
+        content_frame.pack(fill='both', expand=True)
+        
+        # Focus Canvas to draw a white box/corners
+        canvas_focus = tk.Canvas(content_frame, bg=box_color, highlightthickness=0, bd=0, cursor='fleur')
+        canvas_focus.place(relx=0, rely=0, relwidth=1, relheight=1)
+        
+        # Function to redraw indicators on resize
+        def redraw_indicators(event=None):
+            canvas_focus.delete("indicators")
+            w = scan_win.winfo_width()
+            h = scan_win.winfo_height()
+            d = 20 # length of corner lines
+            p = 10 # padding from edge
+            
+            # Top-Left
+            canvas_focus.create_line(p, p, p+d, p, fill='white', width=3, tags="indicators")
+            canvas_focus.create_line(p, p, p, p+d, fill='white', width=3, tags="indicators")
+            # Top-Right
+            canvas_focus.create_line(w-p, p, w-p-d, p, fill='white', width=3, tags="indicators")
+            canvas_focus.create_line(w-p, p, w-p, p+d, fill='white', width=3, tags="indicators")
+            # Bottom-Left
+            canvas_focus.create_line(p, h-p, p+d, h-p, fill='white', width=3, tags="indicators")
+            canvas_focus.create_line(p, h-p, p, h-p-d, fill='white', width=3, tags="indicators")
+            # Bottom-Right
+            canvas_focus.create_line(w-p, h-p, w-p-d, h-p, fill='white', width=3, tags="indicators")
+            canvas_focus.create_line(w-p, h-p, w-p, h-p-d, fill='white', width=3, tags="indicators")
+            # Dashed rectangle
+            canvas_focus.create_rectangle(p+2, p+2, w-p-2, h-p-2, outline='white', width=1, dash=(4,4), tags="indicators")
+
+        # Initial draw
+        scan_win.after(10, redraw_indicators)
+        # Bind resize event to redraw
+        scan_win.bind("<Configure>", lambda e: redraw_indicators())
+
+        # --- Dropdown for TD/PIN selection ---
+        mode_var = tk.StringVar(scan_win, value=pin_data.get('scan_mode', 'TD'))
+        
+        def update_mode(*args):
+            new_mode = mode_var.get()
+            pin_data['scan_mode'] = new_mode
+            instructions.config(text=f"SCAN AREA {new_mode}")
+            
+        mode_var.trace_add("write", update_mode)
+        
+        mode_dropdown = tk.OptionMenu(content_frame, mode_var, "TD", "PIN")
+        mode_dropdown.config(
+            bg=box_color, 
+            fg='white', 
+            activebackground=box_color, 
+            activeforeground='white',
+            relief='flat',
+            highlightthickness=0,
+            font=('Arial', 10, 'bold'),
+            width=5
+        )
+        p = 10 # padding
+        mode_dropdown.place(x=p+5, y=p+5)
+        
+        # Instruction label
+        instructions = tk.Label(
+            content_frame,
+            text=f"SCAN AREA {pin_data['scan_mode']}",
+            bg=box_color,
+            fg='white',
+            font=('Arial', 16, 'bold')
+        )
+        instructions.place(relx=0.5, rely=0.5, anchor='center')
+        
+        # --- Drag logic ---
+        drag_data = {'x': 0, 'y': 0}
+        
+        def on_press(event):
+            drag_data['x'] = event.x
+            drag_data['y'] = event.y
+            
+        def on_drag(event):
+            new_x = scan_win.winfo_x() + (event.x - drag_data['x'])
+            new_y = scan_win.winfo_y() + (event.y - drag_data['y'])
+            scan_win.geometry(f"+{new_x}+{new_y}")
+            
+        scan_win.bind('<Button-1>', on_press)
+        scan_win.bind('<B1-Motion>', on_drag)
+        content_frame.bind('<Button-1>', on_press)
+        content_frame.bind('<B1-Motion>', on_drag)
+        instructions.bind('<Button-1>', on_press)
+        instructions.bind('<B1-Motion>', on_drag)
+        canvas_focus.bind('<Button-1>', on_press)
+        canvas_focus.bind('<B1-Motion>', on_drag)
+        
+        # Close on right click
+        def close_scan(event):
+            scan_win.destroy()
+            pin_data['scan_win'] = None
+            
+        scan_win.bind('<Button-3>', close_scan)
+        content_frame.bind('<Button-3>', close_scan)
+        instructions.bind('<Button-3>', close_scan)
+        canvas_focus.bind('<Button-3>', close_scan)
+
+        # --- Resize handle (Added back) ---
+        resize_handle = tk.Label(
+            content_frame,
+            text="⟋",
+            bg=box_color,
+            fg='white',
+            font=('Arial', 12),
+            cursor='size_nw_se'
+        )
+        resize_handle.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)
+        
+        def on_resize_press(event):
+            drag_data['start_w'] = scan_win.winfo_width()
+            drag_data['start_h'] = scan_win.winfo_height()
+            drag_data['start_x_root'] = event.x_root
+            drag_data['start_y_root'] = event.y_root
+            
+        def on_resize_drag(event):
+            dw = event.x_root - drag_data['start_x_root']
+            dh = event.y_root - drag_data['start_y_root']
+            nw = max(150, drag_data['start_w'] + dw)
+            nh = max(60, drag_data['start_h'] + dh)
+            scan_win.geometry(f"{nw}x{nh}")
+            
+        resize_handle.bind('<Button-1>', on_resize_press)
+        resize_handle.bind('<B1-Motion>', on_resize_drag)
+
     def update_geometry(self):
         num_boxes = len(self.boxes)
         needed_height = 80 + (num_boxes * 42)
