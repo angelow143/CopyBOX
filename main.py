@@ -38,12 +38,14 @@ class CopyBoxApp:
         # We will adjust geometry dynamically
         self.current_x = 100
         self.current_y = 100
-        self.base_width = 600
-        self.min_width = 450
+        self.base_width = 750
+        self.min_width = 650
         
         # Initialize attributes for dragging and resizing to satisfy linter
         self.start_x = 0
         self.start_y = 0
+        self.start_root_x = 0
+        self.start_root_y = 0
         self.resize_start_x = 0
         self.resize_start_w = 0
         
@@ -106,8 +108,12 @@ class CopyBoxApp:
         # Bind dragging to header and label
         self.drag_label.bind('<Button-1>', self.start_move)
         self.drag_label.bind('<B1-Motion>', self.on_move)
+        self.drag_label.bind('<ButtonRelease-1>', self.on_drag_release)
         self.header_frame.bind('<Button-1>', self.start_move)
         self.header_frame.bind('<B1-Motion>', self.on_move)
+        self.header_frame.bind('<ButtonRelease-1>', self.on_drag_release)
+        
+        self.is_collapsed = False
         
         # Close Button
         self.close_btn = tk.Label(
@@ -196,6 +202,13 @@ class CopyBoxApp:
             'color': box_color,
             'scan_win': None,
             'scan_mode': 'TD',
+            'is_control_mode': False,
+            'control_mode': '',
+            'saved_text': 'text here...',
+            'mouse_listener': None,
+            'kb_listener': None,
+            'is_mouse_box': False,
+            'is_active': True
         }
         
         # Color indicator bar on the left
@@ -277,6 +290,26 @@ class CopyBoxApp:
         buttons_frame = tk.Frame(box_frame, bg='white')
         buttons_frame.pack(side='right', padx=(3, 0))
         
+        # --- Control button ---
+        control_btn_frame = tk.Frame(
+            buttons_frame,
+            bg='#2196F3',
+            relief='flat',
+            padx=8,
+            pady=4
+        )
+        control_btn_frame.pack(side='left', padx=(0, 3))
+        
+        control_btn = tk.Label(
+            control_btn_frame,
+            text="control",
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            cursor='hand2'
+        )
+        control_btn.pack()
+
         # --- Paste button ---
         paste_button_frame = tk.Frame(
             buttons_frame,
@@ -337,6 +370,37 @@ class CopyBoxApp:
         )
         scan_button.pack()
         scan_button.bind('<Button-1>', lambda e, pd=pin_data: self.open_scan_box(pd))
+        
+        def toggle_control_normal(event, btn=control_btn, frm=control_btn_frame, entry=search_entry, pd=pin_data):
+            if not pd['is_control_mode']:
+                # Switching to control mode (turn orange)
+                pd['is_control_mode'] = True
+                pd['saved_text'] = entry.get()
+                entry.delete(0, 'end')
+                entry.config(fg='#333333')
+                # If no control previously set, display right click as default
+                if not pd['control_mode']:
+                    entry.insert(0, "right click")
+                else:
+                    entry.insert(0, pd['control_mode'])
+                
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+            else:
+                # Switching back to normal mode (turn blue)
+                pd['is_control_mode'] = False
+                pd['control_mode'] = entry.get().strip()
+                entry.delete(0, 'end')
+                entry.insert(0, pd['saved_text'])
+                if pd['saved_text'] == "text here...":
+                    entry.config(fg='#999999')
+                else:
+                    entry.config(fg='#333333')
+                
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+
+        control_btn.bind('<Button-1>', toggle_control_normal)
         
         def copy_text(event, entry=search_entry, btn=copy_button, frm=copy_button_frame):
             text = entry.get()
@@ -474,6 +538,151 @@ class CopyBoxApp:
                 self.root.after(900, lambda: pin_lbl.config(fg='#FF0000'))
                 self.root.after(1200, lambda: pin_lbl.config(fg='#808080'))
         
+        paste_button.bind('<Button-1>', paste_text)
+
+        # Worker for auto paste logic in normal box
+        def perform_auto_paste_normal(pd):
+            if not pd['pinned'] or pd['target_x'] is None: return
+            if pd['is_control_mode']: return # Don't paste if user is actively configuring the trigger
+
+            def task():
+                try:
+                    time.sleep(0.1)
+                    tx, ty = pd['target_x'], pd['target_y']
+                    orig_x, orig_y = pyautogui.position()
+                    
+                    scan_active = pd.get('scan_win') and pd['scan_win'].winfo_exists()
+                    # if a scan window exists, OCR and Paste it
+                    if scan_active:
+                        scan_win = pd['scan_win']
+                        sx, sy = scan_win.winfo_rootx(), scan_win.winfo_rooty()
+                        sw, sh = scan_win.winfo_width(), scan_win.winfo_height()
+                        
+                        float_win = pd.get('float_win')
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(0, float_win.withdraw)
+                        self.root.after(0, scan_win.withdraw)
+                        self.root.after(0, self.root.withdraw)
+                        time.sleep(0.4)
+                        
+                        screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
+                        scanned_text = ""
+                        if pytesseract:
+                            raw_text = pytesseract.image_to_string(screenshot)
+                            mode = pd.get('scan_mode', 'TD')
+                            if mode == 'TD':
+                                scanned_text = "".join(re.findall(r'\d+', raw_text))
+                            else:
+                                temp_text = raw_text.replace('-', '.')
+                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                        
+                        pyautogui.click(tx, ty)
+                        time.sleep(0.15)
+                        if scanned_text:
+                            pyperclip.copy(scanned_text)
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.15)
+                        
+                        pyautogui.moveTo(orig_x, orig_y)
+                        self.root.after(0, self.root.deiconify)
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(50, float_win.deiconify)
+                        if scan_win and scan_win.winfo_exists():
+                            self.root.after(50, scan_win.deiconify)
+                    else:
+                        # Otherwise fetch text from entry
+                        text_to_paste = pd['entry'].get()
+                        if not text_to_paste or text_to_paste == "text here...": return
+                        
+                        float_win = pd.get('float_win')
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(0, float_win.withdraw)
+                        self.root.after(0, self.root.withdraw)
+                        time.sleep(0.1)
+                        
+                        pyautogui.click(tx, ty)
+                        time.sleep(0.1)
+                        pyperclip.copy(text_to_paste)
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.1)
+                        
+                        pyautogui.moveTo(orig_x, orig_y)
+                        self.root.after(0, self.root.deiconify)
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(50, float_win.deiconify)
+                except Exception as e:
+                    print("Error auto paste normal:", e)
+
+            threading.Thread(target=task, daemon=True).start()
+
+        def on_mouse_click_normal(x, y, button, pressed):
+            if not pin_data['control_mode']: return
+            trigger = str(pin_data.get('control_mode', '')).lower()
+            if not pressed: return
+            
+            if trigger in ['right click', 'right']:
+                if button == mouse.Button.right:
+                    perform_auto_paste_normal(pin_data)
+            elif trigger in ['middle click', 'middle']:
+                if button == mouse.Button.middle:
+                    perform_auto_paste_normal(pin_data)
+            elif trigger in ['left click', 'left']:
+                if button == mouse.Button.left:
+                    perform_auto_paste_normal(pin_data)
+
+        current_keys_normal = set()
+        def on_key_press_normal(key):
+            if not pin_data['control_mode']: return
+            trigger = str(pin_data.get('control_mode', '')).lower().strip()
+            if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
+            
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_keys_normal.add(k_char)
+            
+            modifiers = []
+            if any('ctrl' in k for k in current_keys_normal): modifiers.append('ctrl')
+            if any('shift' in k for k in current_keys_normal): modifiers.append('shift')
+            if any('alt' in k for k in current_keys_normal): modifiers.append('alt')
+            regular = [k for k in current_keys_normal if 'ctrl' not in k and 'shift' not in k and 'alt' not in k and 'cmd' not in k]
+            current_state = modifiers + regular
+            
+            parts = trigger.replace('+', ' ').split()
+            trigger_state = []
+            for p in parts:
+                if p in ['ctrl', 'control']: trigger_state.append('ctrl')
+                elif p in ['shift']: trigger_state.append('shift')
+                elif p in ['alt']: trigger_state.append('alt')
+                else: trigger_state.append(p)
+            
+            if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
+                perform_auto_paste_normal(pin_data)
+
+        def on_key_release_normal(key):
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_keys_normal.discard(k_char)
+
+        def start_listeners_normal(pd):
+            if pd.get('mouse_listener') is None:
+                l = mouse.Listener(on_click=on_mouse_click_normal)
+                l.start()
+                pd['mouse_listener'] = l
+            if pd.get('kb_listener') is None:
+                kl = keyboard.Listener(on_press=on_key_press_normal, on_release=on_key_release_normal)
+                kl.start()
+                pd['kb_listener'] = kl
+
+        def stop_listeners_normal(pd):
+            if pd.get('mouse_listener'):
+                pd['mouse_listener'].stop()
+                pd['mouse_listener'] = None
+            if pd.get('kb_listener'):
+                pd['kb_listener'].stop()
+                pd['kb_listener'] = None
+
+        start_listeners_normal(pin_data)
+
         def reset_paste_btn(btn, frm):
             try:
                 btn.config(text='paste')
@@ -482,7 +691,8 @@ class CopyBoxApp:
             except tk.TclError:
                 pass
                 
-        paste_button.bind('<Button-1>', paste_text)
+        # Move paste button bind down here because we had to inject below it
+        # Wait, the bind was already handled above in the replaced snippet. Let me remove it here.
         
         # --- Small coordinate label under the pin (shows where it's pinned) ---
         coord_label = tk.Label(
@@ -496,7 +706,7 @@ class CopyBoxApp:
         pin_data['coord_label'] = coord_label
         
         # Remove box button (only if more than 1 box)
-        if len(self.boxes) > 0:
+        if len(self.boxes) >= 0:
             del_button = tk.Label(
                 box_frame,
                 text="−",
@@ -507,6 +717,7 @@ class CopyBoxApp:
             )
             del_button.pack(side='right', padx=(0, 5))
             def del_box(event, b_frame=box_frame, pd=pin_data):
+                stop_listeners_normal(pd)
                 # Destroy floating pin if it exists
                 if pd.get('float_win'):
                     try:
@@ -1179,17 +1390,46 @@ class CopyBoxApp:
         resize_handle.bind('<B1-Motion>', on_resize_drag)
 
     def update_geometry(self):
-        num_boxes = len(self.boxes)
-        needed_height = 80 + (num_boxes * 42)
-        # Cap at 80% of screen height
-        max_height = int(self.root.winfo_screenheight() * 0.8)
-        if needed_height > max_height:
-            needed_height = max_height
-        self.root.geometry(f"{self.base_width}x{needed_height}")
+        if getattr(self, 'is_collapsed', False):
+            self.root.geometry(f"160x42")
+        else:
+            num_boxes = len(self.boxes)
+            needed_height = 80 + (num_boxes * 42)
+            # Cap at 80% of screen height
+            max_height = int(self.root.winfo_screenheight() * 0.8)
+            if needed_height > max_height:
+                needed_height = max_height
+            self.root.geometry(f"{self.base_width}x{needed_height}")
+            
+    def toggle_collapse(self):
+        if self.is_collapsed:
+            self.boxes_container.pack(fill='both', expand=True, padx=8, pady=(8, 4))
+            self.resize_frame.pack(fill='x', side='bottom')
+            self.close_btn.pack(side='right', padx=(10, 0))
+            self.add_btn.pack(side='right')
+            self.add_mouse_btn.pack(side='right', padx=(0, 10))
+            self.is_collapsed = False
+        else:
+            self.boxes_container.pack_forget()
+            self.resize_frame.pack_forget()
+            self.close_btn.pack_forget()
+            self.add_btn.pack_forget()
+            self.add_mouse_btn.pack_forget()
+            self.is_collapsed = True
+        self.update_geometry()
         
     def start_move(self, event):
         self.start_x = event.x_root - self.root.winfo_x()
         self.start_y = event.y_root - self.root.winfo_y()
+        self.start_root_x = event.x_root
+        self.start_root_y = event.y_root
+        
+    def on_drag_release(self, event):
+        if hasattr(self, 'start_root_x'):
+            dx = abs(event.x_root - self.start_root_x)
+            dy = abs(event.y_root - self.start_root_y)
+            if dx < 5 and dy < 5:
+                self.toggle_collapse()
     
     def on_move(self, event):
         x = event.x_root - self.start_x
