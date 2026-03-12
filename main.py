@@ -7,6 +7,7 @@ import threading
 import random
 import os
 import re
+from pynput import mouse, keyboard
 
 try:
     import pytesseract
@@ -135,6 +136,20 @@ class CopyBoxApp:
         self.add_btn.bind('<Button-1>', lambda e: self.add_box())
         self.add_btn.bind('<Enter>', lambda e: self.add_btn.config(fg='#45a049'))
         self.add_btn.bind('<Leave>', lambda e: self.add_btn.config(fg='#4CAF50'))
+
+        # Add Mouse Button
+        self.add_mouse_btn = tk.Label(
+            self.header_frame, 
+            text="＋ Add Mouse", 
+            bg='white', 
+            fg='#2196F3', 
+            font=('Arial', 10, 'bold'), 
+            cursor='hand2'
+        )
+        self.add_mouse_btn.pack(side='right', padx=(0, 10))
+        self.add_mouse_btn.bind('<Button-1>', lambda e: self.add_mouse_box())
+        self.add_mouse_btn.bind('<Enter>', lambda e: self.add_mouse_btn.config(fg='#1976D2'))
+        self.add_mouse_btn.bind('<Leave>', lambda e: self.add_mouse_btn.config(fg='#2196F3'))
 
         # Container for copy boxes
         self.boxes_container = tk.Frame(self.rounded_frame, bg='white')
@@ -511,6 +526,314 @@ class CopyBoxApp:
             
         self.boxes.append((box_frame, pin_data))
         self.update_geometry()
+        
+    def add_mouse_box(self):
+        # Create container for the row
+        box_frame = tk.Frame(self.boxes_container, bg='white')
+        box_frame.pack(fill='x', pady=(0, 8))
+        
+        # Assign a unique color to this box
+        box_color = self.pin_colors[self.color_index % len(self.pin_colors)]
+        self.color_index += 1
+        
+        # --- Per-box pin data ---
+        pin_data = {
+            'pinned': False,
+            'target_x': None,
+            'target_y': None,
+            'pin_label': None,
+            'entry': None,
+            'coord_label': None,
+            'color': box_color,
+            'scan_win': None,
+            'scan_mode': 'TD',
+            'is_mouse_box': True,
+            'is_active': False,
+            'control_mode': 'right click',
+            'mouse_listener': None,
+            'kb_listener': None
+        }
+        
+        # Color indicator bar on the left
+        color_bar = tk.Frame(box_frame, width=4, bg=box_color)
+        color_bar.pack(side='left', fill='y', padx=(2, 0))
+        
+        # Pushpin icon (clickable to enter targeting mode)
+        pushpin_label = tk.Label(
+            box_frame, 
+            text="📌", 
+            bg='white', 
+            fg=box_color,
+            font=('Arial', 12),
+            cursor='hand2'
+        )
+        pushpin_label.pack(side='left', padx=(5, 8))
+        pin_data['pin_label'] = pushpin_label
+        
+        # Bind pin click to start targeting
+        pushpin_label.bind('<Button-1>', lambda e, pd=pin_data: self.start_targeting(pd))
+        
+        # Separator line
+        separator1 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator1.pack(side='left', fill='y', padx=(0, 8))
+        
+        # Search entry (Control)
+        control_entry = tk.Entry(
+            box_frame,
+            bg='white',
+            fg='#333333',
+            relief='flat',
+            font=('Arial', 11),
+            width=15,
+            bd=0,
+            highlightthickness=0,
+            insertbackground='#333333',
+            state='disabled'
+        )
+        control_entry.pack(side='left', fill='x', expand=True, padx=5)
+        pin_data['entry'] = control_entry
+        
+        # Set default string
+        control_entry.config(state='normal')
+        control_entry.insert(0, "right click")
+        control_entry.config(state='disabled')
+        
+        # Separator line
+        separator2 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator2.pack(side='left', fill='y', padx=(8, 0))
+        
+        # --- Buttons container ---
+        buttons_frame = tk.Frame(box_frame, bg='white')
+        buttons_frame.pack(side='right', padx=(3, 0))
+
+        # 1st button: Active
+        active_btn_frame = tk.Frame(
+            buttons_frame,
+            bg='#2196F3',
+            relief='flat',
+            padx=8,
+            pady=4
+        )
+        active_btn_frame.pack(side='left', padx=(0, 3))
+        
+        active_btn = tk.Label(
+            active_btn_frame,
+            text="active",
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            cursor='hand2'
+        )
+        active_btn.pack()
+        
+        # 2nd button: Control
+        control_btn_frame = tk.Frame(
+            buttons_frame,
+            bg='#2196F3',
+            relief='flat',
+            padx=8,
+            pady=4
+        )
+        control_btn_frame.pack(side='left')
+        
+        control_btn = tk.Label(
+            control_btn_frame,
+            text="control",
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            cursor='hand2'
+        )
+        control_btn.pack()
+        
+        # 3rd button: Scan
+        scan_btn_frame = tk.Frame(
+            buttons_frame,
+            bg='#2196F3',
+            relief='flat',
+            padx=8,
+            pady=4
+        )
+        scan_btn_frame.pack(side='left', padx=(3, 0))
+        
+        scan_btn = tk.Label(
+            scan_btn_frame,
+            text="scan",
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            cursor='hand2'
+        )
+        scan_btn.pack()
+        scan_btn.bind('<Button-1>', lambda e, pd=pin_data: self.open_scan_box(pd))
+
+        # Handlers
+        def toggle_control(event, btn=control_btn, frm=control_btn_frame, entry=control_entry, pd=pin_data):
+            if entry.cget('state') == 'disabled':
+                entry.config(state='normal')
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+            else:
+                entry.config(state='disabled')
+                pd['control_mode'] = entry.get().strip().lower()
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+
+        control_btn.bind('<Button-1>', toggle_control)
+
+        def toggle_active(event, btn=active_btn, frm=active_btn_frame, pd=pin_data):
+            if not pd['is_active']:
+                # Start listener
+                pd['is_active'] = True
+                frm.config(bg='#FF3333') # Red when active
+                btn.config(bg='#FF3333')
+                start_mouse_listener(pd)
+            else:
+                # Stop listener
+                pd['is_active'] = False
+                frm.config(bg='#2196F3') # Blue when inactive
+                btn.config(bg='#2196F3')
+                stop_mouse_listener(pd)
+
+        active_btn.bind('<Button-1>', toggle_active)
+
+        # Worker for auto paste
+        def perform_auto_paste(pd):
+            if not pd['is_active'] or not pd['pinned'] or pd['target_x'] is None:
+                return
+
+            def task():
+                try:
+                    time.sleep(0.1)
+                    
+                    tx, ty = pd['target_x'], pd['target_y']
+                    # Store the original mouse position to go back to it
+                    orig_x, orig_y = pyautogui.position()
+                    
+                    scan_active = pd.get('scan_win') and pd['scan_win'].winfo_exists()
+                    if scan_active:
+                        # OCR flow
+                        scan_win = pd['scan_win']
+                        sx, sy = scan_win.winfo_rootx(), scan_win.winfo_rooty()
+                        sw, sh = scan_win.winfo_width(), scan_win.winfo_height()
+                        
+                        float_win = pd.get('float_win')
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(0, float_win.withdraw)
+                        self.root.after(0, scan_win.withdraw)
+                        self.root.after(0, self.root.withdraw)
+                        time.sleep(0.4)
+                        
+                        screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
+                        scanned_text = ""
+                        if pytesseract:
+                            raw_text = pytesseract.image_to_string(screenshot)
+                            mode = pd.get('scan_mode', 'TD')
+                            if mode == 'TD':
+                                scanned_text = "".join(re.findall(r'\d+', raw_text))
+                            else:
+                                temp_text = raw_text.replace('-', '.')
+                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                        
+                        pyautogui.click(tx, ty)
+                        time.sleep(0.15)
+                        if scanned_text:
+                            pyperclip.copy(scanned_text)
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.15)
+                        
+                        # Return to original point
+                        pyautogui.moveTo(orig_x, orig_y)
+
+                        self.root.after(0, self.root.deiconify)
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(50, float_win.deiconify)
+                        if scan_win and scan_win.winfo_exists():
+                            self.root.after(50, scan_win.deiconify)
+                    else:
+                        # Normal paste flow (clipboard)
+                        float_win = pd.get('float_win')
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(0, float_win.withdraw)
+                        self.root.after(0, self.root.withdraw)
+                        time.sleep(0.1)
+                        
+                        pyautogui.click(tx, ty)
+                        time.sleep(0.1)
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.1)
+                        
+                        # Return to original point
+                        pyautogui.moveTo(orig_x, orig_y)
+                        
+                        self.root.after(0, self.root.deiconify)
+                        if float_win and float_win.winfo_exists():
+                            self.root.after(50, float_win.deiconify)
+
+                except Exception as e:
+                    print("Error in auto paste:", e)
+
+            threading.Thread(target=task, daemon=True).start()
+
+        def on_mouse_click(x, y, button, pressed):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower()
+            if not pressed: return
+            
+            if trigger in ['right click', 'right']:
+                if button == mouse.Button.right:
+                    perform_auto_paste(pin_data)
+            elif trigger in ['middle click', 'middle']:
+                if button == mouse.Button.middle:
+                    perform_auto_paste(pin_data)
+
+        def start_mouse_listener(pd):
+            if pd['mouse_listener'] is None:
+                l = mouse.Listener(on_click=on_mouse_click)
+                l.start()
+                pd['mouse_listener'] = l
+
+        def stop_mouse_listener(pd):
+            if pd['mouse_listener']:
+                pd['mouse_listener'].stop()
+                pd['mouse_listener'] = None
+
+        # --- Small coordinate label under the pin ---
+        coord_label = tk.Label(
+            box_frame,
+            text="",
+            bg='white',
+            fg='#AAAAAA',
+            font=('Arial', 7)
+        )
+        pin_data['coord_label'] = coord_label
+        
+        # Remove box button
+        if len(self.boxes) >= 0:
+            del_button = tk.Label(
+                box_frame,
+                text="−",
+                bg='white',
+                fg='#FF5555',
+                font=('Arial', 14, 'bold'),
+                cursor='hand2'
+            )
+            del_button.pack(side='right', padx=(0, 5))
+            def del_box(event, b_frame=box_frame, pd=pin_data):
+                stop_mouse_listener(pd)
+                if pd.get('float_win'):
+                    try: pd['float_win'].destroy()
+                    except: pass
+                if pd.get('scan_win'):
+                    try: pd['scan_win'].destroy()
+                    except: pass
+                b_frame.destroy()
+                self.boxes = [(bf, p) for bf, p in self.boxes if bf != b_frame]
+                self.update_geometry()
+            del_button.bind('<Button-1>', del_box)
+            
+        self.boxes.append((box_frame, pin_data))
+        self.update_geometry()
     
     # =============================================
     #  FLOATING DRAGGABLE PIN
@@ -574,8 +897,8 @@ class CopyBoxApp:
         )
         canvas.pack(fill='both', expand=True)
         
-        # Draw the pin emoji at the top-center
-        canvas.create_text(win_w // 2, 15, text="📌", font=('Arial', 16), fill=color)
+        # Draw the target icon at the top-center
+        canvas.create_text(win_w // 2, 15, text="(---)", font=('Arial', 12, 'bold'), fill=color)
         
         # Draw a thin colored line from pin down to the target dot
         canvas.create_line(win_w // 2, 28, win_w // 2, win_h - 8, fill=color, width=2, dash=(3, 2))
