@@ -57,3 +57,10 @@ CopyBOX/
 - `overrideredirect(True)` removes window decorations for a cleaner look
 - The window is draggable by clicking and dragging anywhere on the interface
 - pyperclip handles clipboard operations for the copy functionality
+
+
+
+
+git add .
+git commit -m "add mouse"
+git push origin main

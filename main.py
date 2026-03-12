@@ -687,13 +687,13 @@ class CopyBoxApp:
                 pd['is_active'] = True
                 frm.config(bg='#FF3333') # Red when active
                 btn.config(bg='#FF3333')
-                start_mouse_listener(pd)
+                start_listeners(pd)
             else:
                 # Stop listener
                 pd['is_active'] = False
                 frm.config(bg='#2196F3') # Blue when inactive
                 btn.config(bg='#2196F3')
-                stop_mouse_listener(pd)
+                stop_listeners(pd)
 
         active_btn.bind('<Button-1>', toggle_active)
 
@@ -786,17 +786,69 @@ class CopyBoxApp:
             elif trigger in ['middle click', 'middle']:
                 if button == mouse.Button.middle:
                     perform_auto_paste(pin_data)
+            elif trigger in ['left click', 'left']:
+                if button == mouse.Button.left:
+                    perform_auto_paste(pin_data)
 
-        def start_mouse_listener(pd):
-            if pd['mouse_listener'] is None:
+        current_keys = set()
+        
+        def on_key_press(key):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower().strip()
+            # Ignore mouse click triggers
+            if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
+            
+            try:
+                k_char = key.char.lower()
+                current_keys.add(k_char)
+            except AttributeError:
+                k_str = str(key).lower().replace('key.', '')
+                current_keys.add(k_str)
+                
+            modifiers = []
+            if any('ctrl' in k for k in current_keys): modifiers.append('ctrl')
+            if any('shift' in k for k in current_keys): modifiers.append('shift')
+            if any('alt' in k for k in current_keys): modifiers.append('alt')
+            
+            regular = [k for k in current_keys if 'ctrl' not in k and 'shift' not in k and 'alt' not in k and 'cmd' not in k]
+            current_state = modifiers + regular
+            
+            parts = trigger.replace('+', ' ').split()
+            trigger_state = []
+            for p in parts:
+                if p in ['ctrl', 'control']: trigger_state.append('ctrl')
+                elif p in ['shift']: trigger_state.append('shift')
+                elif p in ['alt']: trigger_state.append('alt')
+                else: trigger_state.append(p)
+            
+            if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
+                perform_auto_paste(pin_data)
+                
+        def on_key_release(key):
+            try:
+                k_char = key.char.lower()
+                current_keys.discard(k_char)
+            except AttributeError:
+                k_str = str(key).lower().replace('key.', '')
+                current_keys.discard(k_str)
+
+        def start_listeners(pd):
+            if pd.get('mouse_listener') is None:
                 l = mouse.Listener(on_click=on_mouse_click)
                 l.start()
                 pd['mouse_listener'] = l
+            if pd.get('kb_listener') is None:
+                kl = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
+                kl.start()
+                pd['kb_listener'] = kl
 
-        def stop_mouse_listener(pd):
-            if pd['mouse_listener']:
+        def stop_listeners(pd):
+            if pd.get('mouse_listener'):
                 pd['mouse_listener'].stop()
                 pd['mouse_listener'] = None
+            if pd.get('kb_listener'):
+                pd['kb_listener'].stop()
+                pd['kb_listener'] = None
 
         # --- Small coordinate label under the pin ---
         coord_label = tk.Label(
@@ -820,7 +872,7 @@ class CopyBoxApp:
             )
             del_button.pack(side='right', padx=(0, 5))
             def del_box(event, b_frame=box_frame, pd=pin_data):
-                stop_mouse_listener(pd)
+                stop_listeners(pd)
                 if pd.get('float_win'):
                     try: pd['float_win'].destroy()
                     except: pass
@@ -898,7 +950,7 @@ class CopyBoxApp:
         canvas.pack(fill='both', expand=True)
         
         # Draw the target icon at the top-center
-        canvas.create_text(win_w // 2, 15, text="(---)", font=('Arial', 12, 'bold'), fill=color)
+        canvas.create_text(win_w // 2, 15, text="(-_-)", font=('Arial', 12, 'bold'), fill=color)
         
         # Draw a thin colored line from pin down to the target dot
         canvas.create_line(win_w // 2, 28, win_w // 2, win_h - 8, fill=color, width=2, dash=(3, 2))
