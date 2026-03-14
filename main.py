@@ -1236,11 +1236,10 @@ class CopyBoxApp:
             if not pd['is_active']: return
             def task():
                 try:
-                    time.sleep(0.2)
                     # Close the context menu if a right click triggered this
                     if pd.get('control_mode') in ['right click', 'right']:
                         pyautogui.press('esc')
-                        time.sleep(0.15)
+                        time.sleep(0.01)
                     pyautogui.hotkey('ctrl', 'c')
                 except Exception as e:
                     print("Global copy error", e)
@@ -1347,19 +1346,19 @@ class CopyBoxApp:
                         if bw.winfo_exists():
                             self.root.after(0, bw.withdraw)
                     self.root.after(0, self.root.withdraw)
-                    time.sleep(0.3)
+                    time.sleep(0.05)
                     
                     orig_x, orig_y = pyautogui.position()
                     pyautogui.click(tx, ty)
-                    time.sleep(0.15)
+                    time.sleep(0.01)
                     pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.15)
+                    time.sleep(0.01)
                     pyautogui.moveTo(orig_x, orig_y)
                     
                     self.root.after(0, self.root.deiconify)
                     for bw in pd['bits']:
                         if bw.winfo_exists():
-                            self.root.after(50, bw.deiconify)
+                            self.root.after(10, bw.deiconify)
                 threading.Thread(target=task, daemon=True).start()
                         
             btn.bind('<Button-1>', do_paste)
