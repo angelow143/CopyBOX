@@ -1236,11 +1236,16 @@ class CopyBoxApp:
             if not pd['is_active']: return
             def task():
                 try:
-                    # Close the context menu if a right click triggered this
-                    if pd.get('control_mode') in ['right click', 'right']:
-                        pyautogui.press('esc')
-                        time.sleep(0.01)
+                    # Instant copy
                     pyautogui.hotkey('ctrl', 'c')
+                    time.sleep(0.01)
+                    pyautogui.hotkey('ctrl', 'c') # Double tap for reliability
+                    
+                    # If right click was used, context menu might appear on release. 
+                    # We can press Esc to close it just in case it popped up.
+                    if pd.get('control_mode') in ['right click', 'right']:
+                        time.sleep(0.05)
+                        pyautogui.press('esc')
                 except Exception as e:
                     print("Global copy error", e)
             threading.Thread(target=task, daemon=True).start()
@@ -1341,18 +1346,20 @@ class CopyBoxApp:
                 tx = float_win.winfo_rootx() + win_w // 2
                 ty = float_win.winfo_rooty() + win_h - 5
                 
+                # Hide windows immediately on the main thread to ensure accurate click location
+                for bw in pd['bits']:
+                    if bw.winfo_exists():
+                        bw.withdraw()
+                self.root.withdraw()
+                self.root.update_idletasks()
+                
                 def task():
-                    for bw in pd['bits']:
-                        if bw.winfo_exists():
-                            self.root.after(0, bw.withdraw)
-                    self.root.after(0, self.root.withdraw)
                     time.sleep(0.05)
-                    
                     orig_x, orig_y = pyautogui.position()
                     pyautogui.click(tx, ty)
-                    time.sleep(0.01)
+                    time.sleep(0.02)
                     pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.01)
+                    time.sleep(0.02)
                     pyautogui.moveTo(orig_x, orig_y)
                     
                     self.root.after(0, self.root.deiconify)
