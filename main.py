@@ -157,6 +157,20 @@ class CopyBoxApp:
         self.add_mouse_btn.bind('<Enter>', lambda e: self.add_mouse_btn.config(fg='#1976D2'))
         self.add_mouse_btn.bind('<Leave>', lambda e: self.add_mouse_btn.config(fg='#2196F3'))
 
+        # Add Global Button
+        self.add_global_btn = tk.Label(
+            self.header_frame, 
+            text="＋ Global", 
+            bg='white', 
+            fg='#9C27B0', 
+            font=('Arial', 10, 'bold'), 
+            cursor='hand2'
+        )
+        self.add_global_btn.pack(side='right', padx=(0, 10))
+        self.add_global_btn.bind('<Button-1>', lambda e: self.add_global_box())
+        self.add_global_btn.bind('<Enter>', lambda e: self.add_global_btn.config(fg='#7B1FA2'))
+        self.add_global_btn.bind('<Leave>', lambda e: self.add_global_btn.config(fg='#9C27B0'))
+
         # Container for copy boxes
         self.boxes_container = tk.Frame(self.rounded_frame, bg='white')
         self.boxes_container.pack(fill='both', expand=True, padx=8, pady=(8, 4))
@@ -1097,6 +1111,300 @@ class CopyBoxApp:
             
         self.boxes.append((box_frame, pin_data))
         self.update_geometry()
+
+    def add_global_box(self):
+        # Create container for the row
+        box_frame = tk.Frame(self.boxes_container, bg='white')
+        box_frame.pack(fill='x', pady=(0, 8))
+        
+        # Assign a unique color to this box
+        box_color = self.pin_colors[self.color_index % len(self.pin_colors)]
+        self.color_index += 1
+        
+        # --- Per-box pin data ---
+        pin_data = {
+            'color': box_color,
+            'is_active': False,
+            'control_mode': 'right click',
+            'mouse_listener': None,
+            'kb_listener': None,
+            'bits': []
+        }
+        
+        # Color indicator bar on the left
+        color_bar = tk.Frame(box_frame, width=4, bg=box_color)
+        color_bar.pack(side='left', fill='y', padx=(2, 0))
+        
+        # Global Icon
+        global_icon = tk.Label(
+            box_frame, 
+            text="🌍", 
+            bg='white', 
+            fg=box_color,
+            font=('Arial', 12)
+        )
+        global_icon.pack(side='left', padx=(5, 8))
+        
+        # Separator line
+        separator1 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator1.pack(side='left', fill='y', padx=(0, 8))
+        
+        # Search entry (Control)
+        control_entry = tk.Entry(
+            box_frame,
+            bg='white',
+            fg='#333333',
+            relief='flat',
+            font=('Arial', 11),
+            width=15,
+            bd=0,
+            highlightthickness=0,
+            insertbackground='#333333',
+            state='disabled'
+        )
+        control_entry.pack(side='left', fill='x', expand=True, padx=5)
+        pin_data['entry'] = control_entry
+        
+        # Set default string
+        control_entry.config(state='normal')
+        control_entry.insert(0, "right click")
+        control_entry.config(state='disabled')
+        
+        # Separator line
+        separator2 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator2.pack(side='left', fill='y', padx=(8, 0))
+        
+        # --- Buttons container ---
+        buttons_frame = tk.Frame(box_frame, bg='white')
+        buttons_frame.pack(side='right', padx=(3, 0))
+
+        # 1st button: Active
+        active_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        active_btn_frame.pack(side='left', padx=(0, 3))
+        active_btn = tk.Label(active_btn_frame, text="active paste", bg='#2196F3', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        active_btn.pack()
+        
+        # 2nd button: Control
+        control_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        control_btn_frame.pack(side='left', padx=(0, 3))
+        control_btn = tk.Label(control_btn_frame, text="control", bg='#2196F3', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        control_btn.pack()
+        
+        # 3rd button: Bit +
+        bit_plus_frame = tk.Frame(buttons_frame, bg='#4CAF50', relief='flat', padx=8, pady=4)
+        bit_plus_frame.pack(side='left', padx=(0, 3))
+        bit_plus_btn = tk.Label(bit_plus_frame, text="bit +1", bg='#4CAF50', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        bit_plus_btn.pack()
+        
+        # 4th button: Bit -
+        bit_minus_frame = tk.Frame(buttons_frame, bg='#FF5555', relief='flat', padx=8, pady=4)
+        bit_minus_frame.pack(side='left')
+        bit_minus_btn = tk.Label(bit_minus_frame, text="bit -", bg='#FF5555', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        bit_minus_btn.pack()
+
+        # Handlers
+        def toggle_control(event, btn=control_btn, frm=control_btn_frame, entry=control_entry, pd=pin_data):
+            if entry.cget('state') == 'disabled':
+                entry.config(state='normal')
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+            else:
+                entry.config(state='disabled')
+                pd['control_mode'] = entry.get().strip().lower()
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+
+        control_btn.bind('<Button-1>', toggle_control)
+
+        def toggle_active(event, btn=active_btn, frm=active_btn_frame, pd=pin_data):
+            if not pd['is_active']:
+                # Start listener
+                pd['is_active'] = True
+                frm.config(bg='#FF3333') # Red when active
+                btn.config(bg='#FF3333')
+                start_listeners(pd)
+            else:
+                # Stop listener
+                pd['is_active'] = False
+                frm.config(bg='#2196F3') # Blue when inactive
+                btn.config(bg='#2196F3')
+                stop_listeners(pd)
+
+        active_btn.bind('<Button-1>', toggle_active)
+
+        def perform_global_copy(pd):
+            if not pd['is_active']: return
+            def task():
+                try:
+                    time.sleep(0.2)
+                    # Close the context menu if a right click triggered this
+                    if pd.get('control_mode') in ['right click', 'right']:
+                        pyautogui.press('esc')
+                        time.sleep(0.15)
+                    pyautogui.hotkey('ctrl', 'c')
+                except Exception as e:
+                    print("Global copy error", e)
+            threading.Thread(target=task, daemon=True).start()
+
+        def on_mouse_click(x, y, button, pressed):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower()
+            if not pressed: return
+            if trigger in ['right click', 'right'] and button == mouse.Button.right:
+                perform_global_copy(pin_data)
+            elif trigger in ['middle click', 'middle'] and button == mouse.Button.middle:
+                perform_global_copy(pin_data)
+            elif trigger in ['left click', 'left'] and button == mouse.Button.left:
+                perform_global_copy(pin_data)
+
+        current_keys = set()
+        def on_key_press(key):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower().strip()
+            if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_keys.add(k_char)
+            
+            modifiers = []
+            if any('ctrl' in k for k in current_keys): modifiers.append('ctrl')
+            if any('shift' in k for k in current_keys): modifiers.append('shift')
+            if any('alt' in k for k in current_keys): modifiers.append('alt')
+            regular = [k for k in current_keys if 'ctrl' not in k and 'shift' not in k and 'alt' not in k and 'cmd' not in k]
+            current_state = modifiers + regular
+            
+            parts = trigger.replace('+', ' ').split()
+            trigger_state = []
+            for p in parts:
+                if p in ['ctrl', 'control']: trigger_state.append('ctrl')
+                elif p in ['shift']: trigger_state.append('shift')
+                elif p in ['alt']: trigger_state.append('alt')
+                else: trigger_state.append(p)
+            
+            if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
+                perform_global_copy(pin_data)
+                
+        def on_key_release(key):
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_keys.discard(k_char)
+
+        def start_listeners(pd):
+            if pd.get('mouse_listener') is None:
+                l = mouse.Listener(on_click=on_mouse_click)
+                l.start()
+                pd['mouse_listener'] = l
+            if pd.get('kb_listener') is None:
+                kl = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
+                kl.start()
+                pd['kb_listener'] = kl
+
+        def stop_listeners(pd):
+            if pd.get('mouse_listener'):
+                pd['mouse_listener'].stop()
+                pd['mouse_listener'] = None
+            if pd.get('kb_listener'):
+                pd['kb_listener'].stop()
+                pd['kb_listener'] = None
+
+        # Bit + floating windows logic
+        def add_bit(event, pd=pin_data):
+            bit_index = len(pd['bits']) + 1
+            float_win = tk.Toplevel(self.root)
+            float_win.overrideredirect(True)
+            float_win.attributes('-topmost', True)
+            float_win.attributes('-alpha', 0.9)
+            float_win.configure(bg='')
+            float_win.wm_attributes('-transparentcolor', '#F0F0F0')
+            
+            win_w = 60
+            win_h = 75
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            init_x = screen_w // 2 - win_w // 2 + (bit_index * 15)
+            init_y = screen_h // 2 - win_h // 2
+            float_win.geometry(f"{win_w}x{win_h}+{init_x}+{init_y}")
+            
+            canvas = tk.Canvas(float_win, width=win_w, height=win_h, bg='#F0F0F0', highlightthickness=0, cursor='fleur')
+            canvas.pack(fill='both', expand=True)
+
+            canvas.create_line(win_w // 2, 28, win_w // 2, win_h - 8, fill=box_color, width=2, dash=(3, 2))
+            dark_color = '#333333'
+            canvas.create_oval(win_w//2-6, win_h-12, win_w//2+6, win_h, fill=box_color, outline=dark_color, width=2)
+            dot_cx, dot_cy = win_w // 2, win_h - 6
+            canvas.create_line(dot_cx - 4, dot_cy, dot_cx + 4, dot_cy, fill='white', width=1)
+            canvas.create_line(dot_cx, dot_cy - 4, dot_cx, dot_cy + 4, fill='white', width=1)
+            
+            btn = tk.Label(float_win, text=f"bit {bit_index}", bg=box_color, fg='white', font=('Arial', 8, 'bold'), cursor='hand2')
+            btn.place(x=0, y=0, width=win_w, height=25)
+            
+            def do_paste(e):
+                tx = float_win.winfo_rootx() + win_w // 2
+                ty = float_win.winfo_rooty() + win_h - 5
+                
+                def task():
+                    for bw in pd['bits']:
+                        if bw.winfo_exists():
+                            self.root.after(0, bw.withdraw)
+                    self.root.after(0, self.root.withdraw)
+                    time.sleep(0.3)
+                    
+                    orig_x, orig_y = pyautogui.position()
+                    pyautogui.click(tx, ty)
+                    time.sleep(0.15)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.15)
+                    pyautogui.moveTo(orig_x, orig_y)
+                    
+                    self.root.after(0, self.root.deiconify)
+                    for bw in pd['bits']:
+                        if bw.winfo_exists():
+                            self.root.after(50, bw.deiconify)
+                threading.Thread(target=task, daemon=True).start()
+                        
+            btn.bind('<Button-1>', do_paste)
+            
+            drag_data = {'x': 0, 'y': 0}
+            def on_press(e):
+                drag_data['x'] = e.x_root - float_win.winfo_x()
+                drag_data['y'] = e.y_root - float_win.winfo_y()
+            def on_drag(e):
+                new_x = e.x_root - drag_data['x']
+                new_y = e.y_root - drag_data['y']
+                float_win.geometry(f"+{new_x}+{new_y}")
+                
+            canvas.bind('<Button-1>', on_press)
+            canvas.bind('<B1-Motion>', on_drag)
+            
+            pd['bits'].append(float_win)
+
+        bit_plus_btn.bind('<Button-1>', add_bit)
+
+        def remove_bit(event, pd=pin_data):
+            if pd['bits']:
+                last_bit = pd['bits'].pop()
+                if last_bit.winfo_exists():
+                    last_bit.destroy()
+                    
+        bit_minus_btn.bind('<Button-1>', remove_bit)
+
+        # Remove box button
+        if len(self.boxes) >= 0:
+            del_button = tk.Label(box_frame, text="−", bg='white', fg='#FF5555', font=('Arial', 14, 'bold'), cursor='hand2')
+            del_button.pack(side='right', padx=(0, 5))
+            def del_box(event, b_frame=box_frame, pd=pin_data):
+                stop_listeners(pd)
+                for bw in pd['bits']:
+                    if bw.winfo_exists():
+                        try: bw.destroy()
+                        except: pass
+                b_frame.destroy()
+                self.boxes = [(bf, p) for bf, p in self.boxes if bf != b_frame]
+                self.update_geometry()
+            del_button.bind('<Button-1>', del_box)
+            
+        self.boxes.append((box_frame, pin_data))
+        self.update_geometry()
     
     # =============================================
     #  FLOATING DRAGGABLE PIN
@@ -1408,6 +1716,7 @@ class CopyBoxApp:
             self.close_btn.pack(side='right', padx=(10, 0))
             self.add_btn.pack(side='right')
             self.add_mouse_btn.pack(side='right', padx=(0, 10))
+            self.add_global_btn.pack(side='right', padx=(0, 10))
             self.is_collapsed = False
         else:
             self.boxes_container.pack_forget()
@@ -1415,6 +1724,7 @@ class CopyBoxApp:
             self.close_btn.pack_forget()
             self.add_btn.pack_forget()
             self.add_mouse_btn.pack_forget()
+            self.add_global_btn.pack_forget()
             self.is_collapsed = True
         self.update_geometry()
         
