@@ -11,13 +11,18 @@ from pynput import mouse, keyboard
 
 try:
     import pytesseract
-    from PIL import Image
+    from PIL import Image, ImageTk
     # Setting the path for Tesseract engine
     tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
     if os.path.exists(tesseract_path):
         pytesseract.pytesseract.tesseract_cmd = tesseract_path
 except ImportError:
     pytesseract = None
+    from PIL import Image
+    try:
+        from PIL import ImageTk
+    except:
+        pass
 
 # Disable pyautogui fail-safe (move mouse to corner to abort) – optional safety
 pyautogui.FAILSAFE = True
@@ -48,6 +53,16 @@ class CopyBoxApp:
         self.start_root_y = 0
         self.resize_start_x = 0
         self.resize_start_w = 0
+        
+        # Logo feature attributes
+        self.luffy_win = None
+        self.luffy_photo = None
+        self.luffy_frames = []
+        self.luffy_frame_index = 0
+        self.luffy_anim_id = None
+        self.luffy_frame_anim_id = None
+        self.luffy_vx = 2
+        self.luffy_vy = 2
         
         self.root.geometry(f"{self.base_width}x110+{self.current_x}+{self.current_y}")
         
@@ -170,6 +185,20 @@ class CopyBoxApp:
         self.add_global_btn.bind('<Button-1>', lambda e: self.add_global_box())
         self.add_global_btn.bind('<Enter>', lambda e: self.add_global_btn.config(fg='#7B1FA2'))
         self.add_global_btn.bind('<Leave>', lambda e: self.add_global_btn.config(fg='#9C27B0'))
+
+        # Add C Button
+        self.add_c_btn = tk.Label(
+            self.header_frame, 
+            text="＋ Add C", 
+            bg='white', 
+            fg='#FF5722', 
+            font=('Arial', 10, 'bold'), 
+            cursor='hand2'
+        )
+        self.add_c_btn.pack(side='right', padx=(0, 10))
+        self.add_c_btn.bind('<Button-1>', lambda e: self.add_c_box())
+        self.add_c_btn.bind('<Enter>', lambda e: self.add_c_btn.config(fg='#D84315'))
+        self.add_c_btn.bind('<Leave>', lambda e: self.add_c_btn.config(fg='#FF5722'))
 
         # Container for copy boxes
         self.boxes_container = tk.Frame(self.rounded_frame, bg='white')
@@ -501,7 +530,7 @@ class CopyBoxApp:
                         print(f"OCR Error: {e}")
                     
                     # Restore windows
-                    self.root.after(0, self.root.deiconify)
+                    self.root.after(0, self.safe_deiconify)
                     if float_win and float_win.winfo_exists():
                         self.root.after(50, float_win.deiconify)
                     if scan_win and scan_win.winfo_exists():
@@ -536,7 +565,7 @@ class CopyBoxApp:
                     pyautogui.hotkey('ctrl', 'v')
                     time.sleep(0.15)
                     
-                    self.root.after(0, self.root.deiconify)
+                    self.root.after(0, self.safe_deiconify)
                     if float_win and float_win.winfo_exists():
                         self.root.after(50, float_win.deiconify)
                     
@@ -598,32 +627,56 @@ class CopyBoxApp:
                         time.sleep(0.15)
                         
                         pyautogui.moveTo(orig_x, orig_y)
-                        self.root.after(0, self.root.deiconify)
+                        self.root.after(0, self.safe_deiconify)
                         if float_win and float_win.winfo_exists():
                             self.root.after(50, float_win.deiconify)
                         if scan_win and scan_win.winfo_exists():
                             self.root.after(50, scan_win.deiconify)
                     else:
-                        # Otherwise fetch text from entry
-                        text_to_paste = pd['entry'].get()
-                        if not text_to_paste or text_to_paste == "text here...": return
-                        
-                        float_win = pd.get('float_win')
-                        if float_win and float_win.winfo_exists():
-                            self.root.after(0, float_win.withdraw)
-                        self.root.after(0, self.root.withdraw)
-                        time.sleep(0.1)
-                        
-                        pyautogui.click(tx, ty)
-                        time.sleep(0.1)
-                        pyperclip.copy(text_to_paste)
-                        pyautogui.hotkey('ctrl', 'v')
-                        time.sleep(0.1)
-                        
-                        pyautogui.moveTo(orig_x, orig_y)
-                        self.root.after(0, self.root.deiconify)
-                        if float_win and float_win.winfo_exists():
-                            self.root.after(50, float_win.deiconify)
+                        # For mouse boxes, copy from current location first, then paste at target
+                        if pd.get('is_mouse_box', False):
+                            # Hide windows temporarily
+                            float_win = pd.get('float_win')
+                            if float_win and float_win.winfo_exists():
+                                self.root.after(0, float_win.withdraw)
+                            self.root.after(0, self.root.withdraw)
+                            time.sleep(0.2)
+                            
+                            # First copy from current location (where right-click happened)
+                            pyautogui.hotkey('ctrl', 'c')
+                            time.sleep(0.2)
+                            
+                            # Then click target location and paste
+                            pyautogui.click(tx, ty)
+                            time.sleep(0.15)
+                            pyautogui.hotkey('ctrl', 'v')
+                            time.sleep(0.15)
+                            
+                            pyautogui.moveTo(orig_x, orig_y)
+                            self.root.after(0, self.safe_deiconify)
+                            if float_win and float_win.winfo_exists():
+                                self.root.after(50, float_win.deiconify)
+                        else:
+                            # Normal box behavior - paste text from entry
+                            text_to_paste = pd['entry'].get()
+                            if not text_to_paste or text_to_paste == "text here...": return
+                            
+                            float_win = pd.get('float_win')
+                            if float_win and float_win.winfo_exists():
+                                self.root.after(0, float_win.withdraw)
+                            self.root.after(0, self.root.withdraw)
+                            time.sleep(0.1)
+                            
+                            pyautogui.click(tx, ty)
+                            time.sleep(0.1)
+                            pyperclip.copy(text_to_paste)
+                            pyautogui.hotkey('ctrl', 'v')
+                            time.sleep(0.1)
+                            
+                            pyautogui.moveTo(orig_x, orig_y)
+                            self.root.after(0, self.safe_deiconify)
+                            if float_win and float_win.winfo_exists():
+                                self.root.after(50, float_win.deiconify)
                 except Exception as e:
                     print("Error auto paste normal:", e)
 
@@ -970,28 +1023,33 @@ class CopyBoxApp:
                         # Return to original point
                         pyautogui.moveTo(orig_x, orig_y)
 
-                        self.root.after(0, self.root.deiconify)
+                        self.root.after(0, self.safe_deiconify)
                         if float_win and float_win.winfo_exists():
                             self.root.after(50, float_win.deiconify)
                         if scan_win and scan_win.winfo_exists():
                             self.root.after(50, scan_win.deiconify)
                     else:
-                        # Normal paste flow (clipboard)
+                        # For mouse boxes, copy from current location first, then paste at target
                         float_win = pd.get('float_win')
                         if float_win and float_win.winfo_exists():
                             self.root.after(0, float_win.withdraw)
                         self.root.after(0, self.root.withdraw)
-                        time.sleep(0.1)
+                        time.sleep(0.2)
                         
+                        # First copy from current location (where right-click happened)
+                        pyautogui.hotkey('ctrl', 'c')
+                        time.sleep(0.2)
+                        
+                        # Then click target location and paste
                         pyautogui.click(tx, ty)
-                        time.sleep(0.1)
+                        time.sleep(0.15)
                         pyautogui.hotkey('ctrl', 'v')
-                        time.sleep(0.1)
+                        time.sleep(0.15)
                         
                         # Return to original point
                         pyautogui.moveTo(orig_x, orig_y)
                         
-                        self.root.after(0, self.root.deiconify)
+                        self.root.after(0, self.safe_deiconify)
                         if float_win and float_win.winfo_exists():
                             self.root.after(50, float_win.deiconify)
 
@@ -1343,29 +1401,46 @@ class CopyBoxApp:
             btn.place(x=0, y=0, width=win_w, height=25)
             
             def do_paste(e):
+                # Get exact bit pointer coordinates
                 tx = float_win.winfo_rootx() + win_w // 2
                 ty = float_win.winfo_rooty() + win_h - 5
                 
-                # Hide windows immediately on the main thread to ensure accurate click location
-                for bw in pd['bits']:
-                    if bw.winfo_exists():
-                        bw.withdraw()
-                self.root.withdraw()
-                self.root.update_idletasks()
-                
                 def task():
-                    time.sleep(0.05)
+                    # Store current mouse position BEFORE any operations
                     orig_x, orig_y = pyautogui.position()
-                    pyautogui.click(tx, ty)
-                    time.sleep(0.02)
-                    pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.02)
-                    pyautogui.moveTo(orig_x, orig_y)
                     
-                    self.root.after(0, self.root.deiconify)
+                    # Hide windows for clean operation
                     for bw in pd['bits']:
                         if bw.winfo_exists():
-                            self.root.after(10, bw.deiconify)
+                            bw.withdraw()
+                    self.root.withdraw()
+                    
+                    # Wait for windows to hide completely
+                    time.sleep(0.2)
+                    
+                    # First copy from current location with double-tap for reliability
+                    pyautogui.hotkey('ctrl', 'c')
+                    time.sleep(0.1)
+                    pyautogui.hotkey('ctrl', 'c')  # Double tap for accuracy
+                    time.sleep(0.2)
+                    
+                    # Click exactly at bit pointer location
+                    pyautogui.click(tx, ty)
+                    time.sleep(0.1)
+                    
+                    # Paste ONCE only
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.1)
+                    
+                    # Return cursor to EXACT original position
+                    pyautogui.moveTo(orig_x, orig_y)
+                    
+                    # Restore windows
+                    self.root.after(0, self.safe_deiconify)
+                    for bw in pd['bits']:
+                        if bw.winfo_exists():
+                            self.root.after(50, bw.deiconify)
+                            
                 threading.Thread(target=task, daemon=True).start()
                         
             btn.bind('<Button-1>', do_paste)
@@ -1412,6 +1487,232 @@ class CopyBoxApp:
         self.boxes.append((box_frame, pin_data))
         self.update_geometry()
     
+    def add_c_box(self):
+        # Create container for the row
+        box_frame = tk.Frame(self.boxes_container, bg='white')
+        box_frame.pack(fill='x', pady=(0, 8))
+        
+        # Assign a unique color to this box
+        box_color = self.pin_colors[self.color_index % len(self.pin_colors)]
+        self.color_index += 1
+        
+        # --- Per-box pin data ---
+        pin_data = {
+            'color': box_color,
+            'is_active': False,
+            'control_mode': 'right click',
+            'mouse_listener': None,
+            'kb_listener': None,
+            'is_c_box': True
+        }
+        
+        # Color indicator bar on the left
+        color_bar = tk.Frame(box_frame, width=4, bg=box_color)
+        color_bar.pack(side='left', fill='y', padx=(2, 0))
+        
+        # C Icon
+        c_icon = tk.Label(
+            box_frame, 
+            text="C", 
+            bg='white', 
+            fg=box_color,
+            font=('Arial', 14, 'bold')
+        )
+        c_icon.pack(side='left', padx=(5, 8))
+        
+        # Separator line
+        separator1 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator1.pack(side='left', fill='y', padx=(0, 8))
+        
+        # Control entry (shows current control setting)
+        control_entry = tk.Entry(
+            box_frame,
+            bg='white',
+            fg='#333333',
+            relief='flat',
+            font=('Arial', 11),
+            width=15,
+            bd=0,
+            highlightthickness=0,
+            insertbackground='#333333',
+            state='disabled'
+        )
+        control_entry.pack(side='left', fill='x', expand=True, padx=5)
+        pin_data['entry'] = control_entry
+        
+        # Set default string
+        control_entry.config(state='normal')
+        control_entry.insert(0, "right click")
+        control_entry.config(state='disabled')
+        
+        # Separator line
+        separator2 = tk.Frame(box_frame, width=1, bg='#E0E0E0')
+        separator2.pack(side='left', fill='y', padx=(8, 0))
+        
+        # --- Buttons container ---
+        buttons_frame = tk.Frame(box_frame, bg='white')
+        buttons_frame.pack(side='right', padx=(3, 0))
+
+        # Active button
+        active_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        active_btn_frame.pack(side='left', padx=(0, 3))
+        active_btn = tk.Label(active_btn_frame, text="active", bg='#2196F3', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        active_btn.pack()
+        
+        # Control button
+        control_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        control_btn_frame.pack(side='left', padx=(0, 3))
+        control_btn = tk.Label(control_btn_frame, text="control", bg='#2196F3', fg='white', font=('Arial', 9, 'bold'), cursor='hand2')
+        control_btn.pack()
+
+        # Control button handler
+        def toggle_control(event, btn=control_btn, frm=control_btn_frame, entry=control_entry, pd=pin_data):
+            if entry.cget('state') == 'disabled':
+                # Enable editing
+                entry.config(state='normal')
+                entry.focus()
+                btn.config(text='save')
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+            else:
+                # Save and disable
+                new_control = entry.get().strip()
+                if new_control:
+                    pd['control_mode'] = new_control
+                entry.config(state='disabled')
+                btn.config(text='control')
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+        
+        control_btn.bind('<Button-1>', toggle_control)
+
+        # Active button handler
+        def toggle_active(event, btn=active_btn, frm=active_btn_frame, pd=pin_data):
+            if not pd['is_active']:
+                # Start listener
+                pd['is_active'] = True
+                frm.config(bg='#FF3333') # Red when active
+                btn.config(bg='#FF3333')
+                start_c_listeners(pd)
+            else:
+                # Stop listener
+                pd['is_active'] = False
+                frm.config(bg='#2196F3') # Blue when inactive
+                btn.config(bg='#2196F3')
+                stop_c_listeners(pd)
+
+        active_btn.bind('<Button-1>', toggle_active)
+
+        # C Box mouse click handler - trigger to click and paste at cursor location
+        def on_c_mouse_click(x, y, button, pressed):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower()
+            if not pressed: return
+            
+            # Check if the trigger matches
+            trigger_matched = False
+            if trigger in ['right click', 'right'] and button == mouse.Button.right:
+                trigger_matched = True
+            elif trigger in ['middle click', 'middle'] and button == mouse.Button.middle:
+                trigger_matched = True
+            elif trigger in ['left click', 'left'] and button == mouse.Button.left:
+                trigger_matched = True
+                
+            if trigger_matched:
+                perform_c_click_paste(x, y)
+
+        def perform_c_click_paste(x, y):
+            def task():
+                try:
+                    time.sleep(0.1)
+                    # Get current cursor position (where arrow is pointing)
+                    cursor_x, cursor_y = pyautogui.position()
+                    
+                    # Click at cursor location and paste
+                    pyautogui.click(cursor_x, cursor_y)
+                    time.sleep(0.1)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.1)
+                except Exception as e:
+                    print("C box click paste error:", e)
+            threading.Thread(target=task, daemon=True).start()
+
+        # Keyboard handler for C box
+        current_c_keys = set()
+        def on_c_key_press(key):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower().strip()
+            if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
+            
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_c_keys.add(k_char)
+            
+            modifiers = []
+            if any('ctrl' in k for k in current_c_keys): modifiers.append('ctrl')
+            if any('shift' in k for k in current_c_keys): modifiers.append('shift')
+            if any('alt' in k for k in current_c_keys): modifiers.append('alt')
+            regular = [k for k in current_c_keys if 'ctrl' not in k and 'shift' not in k and 'alt' not in k and 'cmd' not in k]
+            current_state = modifiers + regular
+            
+            parts = trigger.replace('+', ' ').split()
+            trigger_state = []
+            for p in parts:
+                if p in ['ctrl', 'control']: trigger_state.append('ctrl')
+                elif p in ['shift']: trigger_state.append('shift')
+                elif p in ['alt']: trigger_state.append('alt')
+                else: trigger_state.append(p)
+            
+            if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
+                # Get current mouse position and perform click paste there
+                x, y = pyautogui.position()
+                perform_c_click_paste(x, y)
+
+        def on_c_key_release(key):
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_c_keys.discard(k_char)
+
+        def start_c_listeners(pd):
+            if pd.get('mouse_listener') is None:
+                l = mouse.Listener(on_click=on_c_mouse_click)
+                l.start()
+                pd['mouse_listener'] = l
+            if pd.get('kb_listener') is None:
+                kl = keyboard.Listener(on_press=on_c_key_press, on_release=on_c_key_release)
+                kl.start()
+                pd['kb_listener'] = kl
+
+        def stop_c_listeners(pd):
+            if pd.get('mouse_listener'):
+                pd['mouse_listener'].stop()
+                pd['mouse_listener'] = None
+            if pd.get('kb_listener'):
+                pd['kb_listener'].stop()
+                pd['kb_listener'] = None
+
+        # Remove box button (only if more than 1 box)
+        if len(self.boxes) > 0:
+            del_button = tk.Label(
+                box_frame,
+                text="−",
+                bg='white',
+                fg='#FF5555',
+                font=('Arial', 14, 'bold'),
+                cursor='hand2'
+            )
+            del_button.pack(side='right', padx=(0, 5))
+            def del_box(event, b_frame=box_frame, pd=pin_data):
+                # Stop listeners
+                stop_c_listeners(pd)
+                b_frame.destroy()
+                self.boxes = [(bf, p) for bf, p in self.boxes if bf != b_frame]
+                self.update_geometry()
+            del_button.bind('<Button-1>', del_box)
+            
+        self.boxes.append((box_frame, pin_data))
+        self.update_geometry()
+
     # =============================================
     #  FLOATING DRAGGABLE PIN
     # =============================================
@@ -1706,6 +2007,9 @@ class CopyBoxApp:
     def update_geometry(self):
         if getattr(self, 'is_collapsed', False):
             self.root.geometry(f"160x42")
+        elif self.luffy_win and self.luffy_win.winfo_exists():
+            # If hidden as Luffy, don't try to resize the hidden root
+            return
         else:
             num_boxes = len(self.boxes)
             needed_height = 80 + (num_boxes * 42)
@@ -1714,6 +2018,11 @@ class CopyBoxApp:
             if needed_height > max_height:
                 needed_height = max_height
             self.root.geometry(f"{self.base_width}x{needed_height}")
+            
+    def safe_deiconify(self):
+        """Restore window only if not currently hidden as Luffy logo."""
+        if not self.luffy_win or not self.luffy_win.winfo_exists():
+            self.root.deiconify()
             
     def toggle_collapse(self):
         if self.is_collapsed:
@@ -1745,7 +2054,7 @@ class CopyBoxApp:
             dx = abs(event.x_root - self.start_root_x)
             dy = abs(event.y_root - self.start_root_y)
             if dx < 5 and dy < 5:
-                self.toggle_collapse()
+                self.toggle_hide_to_luffy()
     
     def on_move(self, event):
         x = event.x_root - self.start_x
@@ -1761,6 +2070,150 @@ class CopyBoxApp:
         new_width = max(self.min_width, self.resize_start_w + dx)
         self.base_width = new_width
         self.update_geometry()
+
+    # =============================================
+    #  LUFFY LOGO / HIDE FEATURE
+    # =============================================
+    def toggle_hide_to_luffy(self):
+        """Hide main window and show floating Luffy logo."""
+        self.root.withdraw()
+        self.show_luffy_floating()
+
+    def show_luffy_floating(self):
+        if self.luffy_win and self.luffy_win.winfo_exists():
+            return
+        
+        self.luffy_win = tk.Toplevel(self.root)
+        self.luffy_win.overrideredirect(True)
+        self.luffy_win.attributes('-topmost', True)
+        
+        # Transparent background setup
+        trans_color = '#FFFFFF'
+        self.luffy_win.wm_attributes('-transparentcolor', trans_color)
+        self.luffy_win.configure(bg=trans_color)
+        
+        # Load Luffy GIF frames if not already loaded
+        if not self.luffy_frames:
+            try:
+                gif_path = os.path.join(os.path.dirname(__file__), "assets", "luffy.gif")
+                if os.path.exists(gif_path):
+                    gif_img = Image.open(gif_path)
+                    try:
+                        while True:
+                            # Process each frame for better transparency and size
+                            frame = gif_img.copy().convert("RGBA")
+                            # Put frame on a white background to respect the transparentcolor
+                            bg = Image.new("RGBA", frame.size, (255, 255, 255, 255))
+                            bg.paste(frame, (0, 0), frame)
+                            bg = bg.resize((90, 90), Image.Resampling.LANCZOS)
+                            self.luffy_frames.append(ImageTk.PhotoImage(bg))
+                            gif_img.seek(gif_img.tell() + 1)
+                    except EOFError:
+                        pass
+            except Exception as e:
+                print(f"Error loading luffy gif: {e}")
+
+        self.luffy_frame_index = 0
+        if self.luffy_frames:
+            self.luffy_label = tk.Label(self.luffy_win, image=self.luffy_frames[0], bg=trans_color, cursor='hand2')
+        else:
+            # Fallback
+            self.luffy_label = tk.Label(self.luffy_win, text="🍖", font=('Arial', 24), bg=trans_color, cursor='hand2')
+        
+        self.luffy_label.pack()
+        
+        # Draggable logic for Luffy
+        drag_data = {'x': 0, 'y': 0, 'moved': False}
+        def on_press(e):
+            drag_data['x'] = e.x
+            drag_data['y'] = e.y
+            drag_data['moved'] = False
+        
+        def on_drag(e):
+            drag_data['moved'] = True
+            nx = self.luffy_win.winfo_x() + (e.x - drag_data['x'])
+            ny = self.luffy_win.winfo_y() + (e.y - drag_data['y'])
+            self.luffy_win.geometry(f"+{nx}+{ny}")
+        
+        def on_release(e):
+            if not drag_data['moved']:
+                self.restore_from_luffy()
+        
+        self.luffy_label.bind('<Button-1>', on_press)
+        self.luffy_label.bind('<B1-Motion>', on_drag)
+        self.luffy_label.bind('<ButtonRelease-1>', on_release)
+
+        # Start position
+        curr_x = self.root.winfo_x()
+        curr_y = self.root.winfo_y()
+        self.luffy_win.geometry(f"90x90+{curr_x + 300}+{curr_y}")
+        
+        # Start only the GIF frame animation
+        self.animate_luffy_gif()
+
+    def animate_luffy_gif(self):
+        """Update the GIF frame."""
+        if not self.luffy_win or not self.luffy_win.winfo_exists() or not self.luffy_frames:
+            return
+        
+        self.luffy_frame_index = (self.luffy_frame_index + 1) % len(self.luffy_frames)
+        self.luffy_label.config(image=self.luffy_frames[self.luffy_frame_index])
+        
+        # Loop every 80ms (standard GIF speed approx)
+        self.luffy_frame_anim_id = self.root.after(80, self.animate_luffy_gif)
+
+    def start_luffy_animation(self):
+        """Make Luffy wander around the screen gently."""
+        if not self.luffy_win or not self.luffy_win.winfo_exists():
+            return
+
+        try:
+            # Screen boundaries
+            sw = self.luffy_win.winfo_screenwidth()
+            sh = self.luffy_win.winfo_screenheight()
+            
+            # Current position
+            x = self.luffy_win.winfo_x()
+            y = self.luffy_win.winfo_y()
+            w = 90
+            h = 90
+            
+            # Change direction if edge hit
+            if x <= 0: self.luffy_vx = abs(self.luffy_vx)
+            elif x + w >= sw: self.luffy_vx = -abs(self.luffy_vx)
+            
+            if y <= 0: self.luffy_vy = abs(self.luffy_vy)
+            elif y + h >= sh: self.luffy_vy = -abs(self.luffy_vy)
+                
+            # Random slight change in velocity
+            if random.random() < 0.05:
+                self.luffy_vx += random.uniform(-0.5, 0.5)
+                self.luffy_vy += random.uniform(-0.5, 0.5)
+                
+            # Move
+            new_x = int(x + self.luffy_vx)
+            new_y = int(y + self.luffy_vy)
+            
+            # Respect screen bounds
+            new_x = max(0, min(sw - w, new_x))
+            new_y = max(0, min(sh - h, new_y))
+            
+            self.luffy_win.geometry(f"+{new_x}+{new_y}")
+            
+            self.luffy_anim_id = self.root.after(30, self.start_luffy_animation)
+        except Exception:
+            pass
+
+    def restore_from_luffy(self):
+        """Close Luffy logo and restore main window."""
+        if self.luffy_frame_anim_id:
+            self.root.after_cancel(self.luffy_frame_anim_id)
+            self.luffy_frame_anim_id = None
+            
+        if self.luffy_win:
+            self.luffy_win.destroy()
+            self.luffy_win = None
+        self.root.deiconify()
 
 if __name__ == "__main__":
     root = tk.Tk()
