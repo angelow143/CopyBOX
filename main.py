@@ -2093,6 +2093,7 @@ class CopyBoxApp:
         self.luffy_win.configure(bg=trans_color)
         
         # Load Luffy GIF frames if not already loaded
+        # Load Luffy GIF frames if not already loaded
         if not self.luffy_frames:
             try:
                 gif_path = os.path.join(os.path.dirname(__file__), "assets", "luffy.gif")
