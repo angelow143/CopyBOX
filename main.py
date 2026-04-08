@@ -200,6 +200,20 @@ class CopyBoxApp:
         self.add_c_btn.bind('<Enter>', lambda e: self.add_c_btn.config(fg='#D84315'))
         self.add_c_btn.bind('<Leave>', lambda e: self.add_c_btn.config(fg='#FF5722'))
 
+        # +Scan Button (opens scan for active C-box)
+        self.scan_hdr_btn = tk.Label(
+            self.header_frame,
+            text="＋ Scan",
+            bg='white',
+            fg='#009688',
+            font=('Arial', 10, 'bold'),
+            cursor='hand2'
+        )
+        self.scan_hdr_btn.pack(side='right', padx=(0, 10))
+        self.scan_hdr_btn.bind('<Button-1>', lambda e: self.add_scan_box())
+        self.scan_hdr_btn.bind('<Enter>', lambda e: self.scan_hdr_btn.config(fg='#00695C'))
+        self.scan_hdr_btn.bind('<Leave>', lambda e: self.scan_hdr_btn.config(fg='#009688'))
+
         # Container for copy boxes
         self.boxes_container = tk.Frame(self.rounded_frame, bg='white')
         self.boxes_container.pack(fill='both', expand=True, padx=8, pady=(8, 4))
@@ -1487,6 +1501,192 @@ class CopyBoxApp:
         self.boxes.append((box_frame, pin_data))
         self.update_geometry()
     
+    def add_scan_box(self):
+        """Add a new S-box (like C-box: active + control only, S icon, no scan overlay)."""
+        box_frame = tk.Frame(self.boxes_container, bg='white')
+        box_frame.pack(fill='x', pady=(0, 8))
+
+        box_color = self.pin_colors[self.color_index % len(self.pin_colors)]
+        self.color_index += 1
+
+        pin_data = {
+            'color': box_color,
+            'is_active': False,
+            'control_mode': 'right click',
+            'mouse_listener': None,
+            'kb_listener': None,
+            'is_scan_box': True,
+            'scan_win': None,
+            'scan_mode': 'TD',
+        }
+
+        # Color bar
+        color_bar = tk.Frame(box_frame, width=4, bg=box_color)
+        color_bar.pack(side='left', fill='y', padx=(2, 0))
+
+        # S icon
+        s_icon = tk.Label(box_frame, text='S', bg='white', fg=box_color,
+                          font=('Arial', 14, 'bold'))
+        s_icon.pack(side='left', padx=(5, 8))
+
+        # Separator
+        tk.Frame(box_frame, width=1, bg='#E0E0E0').pack(side='left', fill='y', padx=(0, 8))
+
+        # Control entry (shows current control setting)
+        control_entry = tk.Entry(
+            box_frame, bg='white', fg='#333333', relief='flat',
+            font=('Arial', 11), width=15, bd=0, highlightthickness=0,
+            insertbackground='#333333', state='disabled'
+        )
+        control_entry.pack(side='left', fill='x', expand=True, padx=5)
+        pin_data['entry'] = control_entry
+        control_entry.config(state='normal')
+        control_entry.insert(0, 'right click')
+        control_entry.config(state='disabled')
+
+        # Separator
+        tk.Frame(box_frame, width=1, bg='#E0E0E0').pack(side='left', fill='y', padx=(8, 0))
+
+        # Buttons
+        buttons_frame = tk.Frame(box_frame, bg='white')
+        buttons_frame.pack(side='right', padx=(3, 0))
+
+        # Active button
+        active_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        active_btn_frame.pack(side='left', padx=(0, 3))
+        active_btn = tk.Label(active_btn_frame, text='active', bg='#2196F3', fg='white',
+                              font=('Arial', 9, 'bold'), cursor='hand2')
+        active_btn.pack()
+
+        # Control button
+        control_btn_frame = tk.Frame(buttons_frame, bg='#2196F3', relief='flat', padx=8, pady=4)
+        control_btn_frame.pack(side='left', padx=(0, 3))
+        control_btn = tk.Label(control_btn_frame, text='control', bg='#2196F3', fg='white',
+                               font=('Arial', 9, 'bold'), cursor='hand2')
+        control_btn.pack()
+
+        def toggle_control(event, btn=control_btn, frm=control_btn_frame,
+                           entry=control_entry, pd=pin_data):
+            if entry.cget('state') == 'disabled':
+                entry.config(state='normal')
+                entry.focus()
+                btn.config(text='save')
+                frm.config(bg='#FF9800')
+                btn.config(bg='#FF9800')
+            else:
+                new_control = entry.get().strip()
+                if new_control:
+                    pd['control_mode'] = new_control
+                entry.config(state='disabled')
+                btn.config(text='control')
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+
+        control_btn.bind('<Button-1>', toggle_control)
+
+        def toggle_active(event, btn=active_btn, frm=active_btn_frame, pd=pin_data):
+            if not pd['is_active']:
+                pd['is_active'] = True
+                frm.config(bg='#FF3333')
+                btn.config(bg='#FF3333')
+                start_s_listeners(pd)
+            else:
+                pd['is_active'] = False
+                frm.config(bg='#2196F3')
+                btn.config(bg='#2196F3')
+                stop_s_listeners(pd)
+
+        active_btn.bind('<Button-1>', toggle_active)
+
+        def perform_s_paste(x, y):
+            def task():
+                try:
+                    time.sleep(0.1)
+                    cursor_x, cursor_y = pyautogui.position()
+                    pyautogui.click(cursor_x, cursor_y)
+                    time.sleep(0.1)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.1)
+                except Exception as e:
+                    print('S-box paste error:', e)
+            threading.Thread(target=task, daemon=True).start()
+
+        def on_s_mouse_click(x, y, button, pressed):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower()
+            if not pressed: return
+            if trigger in ['right click', 'right'] and button == mouse.Button.right:
+                perform_s_paste(x, y)
+            elif trigger in ['middle click', 'middle'] and button == mouse.Button.middle:
+                perform_s_paste(x, y)
+            elif trigger in ['left click', 'left'] and button == mouse.Button.left:
+                perform_s_paste(x, y)
+
+        current_s_keys = set()
+        def on_s_key_press(key):
+            if not pin_data.get('is_active'): return
+            trigger = str(pin_data.get('control_mode', '')).lower().strip()
+            if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_s_keys.add(k_char)
+            modifiers = []
+            if any('ctrl' in k for k in current_s_keys): modifiers.append('ctrl')
+            if any('shift' in k for k in current_s_keys): modifiers.append('shift')
+            if any('alt' in k for k in current_s_keys): modifiers.append('alt')
+            regular = [k for k in current_s_keys if not any(m in k for m in ['ctrl','shift','alt','cmd'])]
+            current_state = modifiers + regular
+            parts = trigger.replace('+', ' ').split()
+            trigger_state = []
+            for p in parts:
+                if p in ['ctrl', 'control']: trigger_state.append('ctrl')
+                elif p == 'shift': trigger_state.append('shift')
+                elif p == 'alt': trigger_state.append('alt')
+                else: trigger_state.append(p)
+            if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
+                x, y = pyautogui.position()
+                perform_s_paste(x, y)
+
+        def on_s_key_release(key):
+            try: k_char = key.char.lower()
+            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            current_s_keys.discard(k_char)
+
+        def start_s_listeners(pd):
+            if pd.get('mouse_listener') is None:
+                l = mouse.Listener(on_click=on_s_mouse_click)
+                l.start()
+                pd['mouse_listener'] = l
+            if pd.get('kb_listener') is None:
+                kl = keyboard.Listener(on_press=on_s_key_press, on_release=on_s_key_release)
+                kl.start()
+                pd['kb_listener'] = kl
+
+        def stop_s_listeners(pd):
+            if pd.get('mouse_listener'):
+                pd['mouse_listener'].stop()
+                pd['mouse_listener'] = None
+            if pd.get('kb_listener'):
+                pd['kb_listener'].stop()
+                pd['kb_listener'] = None
+
+        # Delete button
+        del_button = tk.Label(box_frame, text='−', bg='white', fg='#FF5555',
+                              font=('Arial', 14, 'bold'), cursor='hand2')
+        del_button.pack(side='right', padx=(0, 5))
+
+        def del_box(event, b_frame=box_frame, pd=pin_data):
+            stop_s_listeners(pd)
+            b_frame.destroy()
+            self.boxes = [(bf, p) for bf, p in self.boxes if bf != b_frame]
+            self.update_geometry()
+
+        del_button.bind('<Button-1>', del_box)
+
+        self.boxes.append((box_frame, pin_data))
+        self.update_geometry()
+
+
     def add_c_box(self):
         # Create container for the row
         box_frame = tk.Frame(self.boxes_container, bg='white')
@@ -1503,7 +1703,9 @@ class CopyBoxApp:
             'control_mode': 'right click',
             'mouse_listener': None,
             'kb_listener': None,
-            'is_c_box': True
+            'is_c_box': True,
+            'scan_win': None,
+            'scan_mode': 'TD',
         }
         
         # Color indicator bar on the left
