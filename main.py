@@ -1524,10 +1524,27 @@ class CopyBoxApp:
         color_bar = tk.Frame(box_frame, width=4, bg=box_color)
         color_bar.pack(side='left', fill='y', padx=(2, 0))
 
-        # S icon
-        s_icon = tk.Label(box_frame, text='S', bg='white', fg=box_color,
-                          font=('Arial', 14, 'bold'))
+        # S icon / Mode toggle
+        s_icon = tk.Label(box_frame, text='S (TD)', bg='white', fg=box_color,
+                          font=('Arial', 10, 'bold'), cursor='hand2')
         s_icon.pack(side='left', padx=(5, 8))
+
+        def toggle_s_mode(event):
+            current = pin_data.get('scan_mode', 'TD')
+            if current == 'TD':
+                pin_data['scan_mode'] = 'PIN'
+                s_icon.config(text='S (PIN)')
+            elif current == 'PIN':
+                pin_data['scan_mode'] = 'OWNR'
+                s_icon.config(text='S (OWNR)')
+            elif current == 'OWNR':
+                pin_data['scan_mode'] = 'ALL'
+                s_icon.config(text='S (ALL)')
+            else:
+                pin_data['scan_mode'] = 'TD'
+                s_icon.config(text='S (TD)')
+
+        s_icon.bind('<Button-1>', toggle_s_mode)
 
         # Separator
         tk.Frame(box_frame, width=1, bg='#E0E0E0').pack(side='left', fill='y', padx=(0, 8))
@@ -1775,6 +1792,7 @@ class CopyBoxApp:
                                     if loose_pin:
                                         pin_cleaned = re.sub(r'[^\d]', '.', loose_pin.group(1))
                                         pin_text = re.sub(r'\.+', '.', pin_cleaned).strip('.')
+<<<<<<< HEAD
                             # 3. Extract Owner (Declarant Name)
                             owner_text = ""
                             owner_match = re.search(r'Owner[\s_:]*([A-Za-z\s\,\.\/\(\)\-]+?)(?:\s{2,}|Telephone|Administrator|Address|\n|$)', raw_text, re.IGNORECASE)
@@ -1818,6 +1836,41 @@ class CopyBoxApp:
                                 pyautogui.hotkey('ctrl', 'v')
                         else:
                             print("S-box OCR: Caching background text...")
+=======
+                            
+                            # 3. Extract Owner
+                            owner_text = ""
+                            # Look for 'Owner' followed by underscore/colon/space, capture until Telephone, Administrator, double space, or newline
+                            owner_match = re.search(r'Owner[\s_:]*([A-Za-z\s\,\.\/\(\)\-]+?)(?:\s{2,}|Telephone|Administrator|\n|$)', raw_text, re.IGNORECASE)
+                            if owner_match:
+                                owner_text = owner_match.group(1).strip()
+                            
+                            mode = pin_data.get('scan_mode', 'TD')
+                            
+                            if mode == 'ALL':
+                                if owner_text or td_text or pin_text:
+                                    if owner_text:
+                                        pyautogui.write(owner_text, interval=0.01)
+                                    time.sleep(0.1)
+                                    pyautogui.press('tab')
+                                    time.sleep(0.1)
+                                    if td_text:
+                                        pyautogui.write(td_text, interval=0.01)
+                                    time.sleep(0.1)
+                                    pyautogui.press('tab')
+                                    time.sleep(0.1)
+                                    if pin_text:
+                                        pyautogui.write(pin_text, interval=0.01)
+                                else:
+                                    print("S-box OCR: NO Owner, TD or PIN match found in text ->", repr(raw_text))
+                            elif mode == 'TD':
+                                if td_text: pyautogui.write(td_text, interval=0.01)
+                            elif mode == 'PIN':
+                                if pin_text: pyautogui.write(pin_text, interval=0.01)
+                            elif mode == 'OWNR':
+                                if owner_text: pyautogui.write(owner_text, interval=0.01)
+
+>>>>>>> 548ce74b1b09abc775d728685534f75f201352b6
                     else:
                         pyautogui.hotkey('ctrl', 'v')
                     time.sleep(0.1)
