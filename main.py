@@ -1711,7 +1711,83 @@ class CopyBoxApp:
                     cursor_x, cursor_y = pyautogui.position()
                     pyautogui.click(cursor_x, cursor_y)
                     time.sleep(0.1)
-                    pyautogui.hotkey('ctrl', 'v')
+                    
+                    ov = pin_data.get('scan_overlay')
+                    if ov and ov.winfo_exists() and pytesseract:
+                        BAR_H = 18
+                        sx = ov.winfo_rootx() + 1
+                        sy = ov.winfo_rooty() + BAR_H
+                        sw = ov.winfo_width() - 2
+                        sh = ov.winfo_height() - BAR_H - 1
+                        
+                        if sw > 0 and sh > 0:
+                            screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
+                            
+                            # Preprocess image for much better OCR accuracy on small text
+                            if 'Image' in globals():
+                                # upscale 3x and convert to grayscale
+                                try:
+                                    img = screenshot.resize((sw*3, sh*3), Image.Resampling.LANCZOS)
+                                    img = img.convert('L')
+                                    raw_text = pytesseract.image_to_string(img)
+                                except Exception as e:
+                                    print("Image scaling error:", e)
+                                    raw_text = pytesseract.image_to_string(screenshot)
+                            else:
+                                raw_text = pytesseract.image_to_string(screenshot)
+                            
+                            print("S-BOX DEBUG OCR RAW ==>")
+                            print(repr(raw_text))
+                            
+                            # 1. Extract TD
+                            td_text = ""
+                            # Primary: Look for keyword followed by digits with a separator
+                            td_keyword_match = re.search(r'TD/?[A-Z]*\s*NO\.?[^\d]*(\d{2}[-\.\s]+\d{10,14})', raw_text, re.IGNORECASE)
+                            if td_keyword_match:
+                                td_text = re.sub(r'\D', '', td_keyword_match.group(1))
+                            else:
+                                # Fallback: Strict structural pattern ANYWHERE, MUST have separator to avoid typed fields
+                                alt_td = re.search(r'\b(\d{2})[-\.\s]+(\d{10,14})\b', raw_text)
+                                if alt_td:
+                                    td_text = alt_td.group(1) + alt_td.group(2)
+                                else:
+                                    # Fallback 2: Looser keyword search
+                                    loose_td = re.search(r'TD/?[A-Z]*\s*NO\.?[^\d]*([\d\-]+)', raw_text, re.IGNORECASE)
+                                    if loose_td:
+                                        td_text = re.sub(r'\D', '', loose_td.group(1))
+
+                            # 2. Extract PIN
+                            pin_text = ""
+                            # Primary: Look for keyword followed by strict 5-segment pattern
+                            pin_keyword_match = re.search(r'PROPERTY\s*INDEX[^\d]*(\d{3}[-\.\s]+\d{2}[-\.\s]+\d{4}[-\.\s]+\d{3}[-\.\s]+\d{2})', raw_text, re.IGNORECASE)
+                            if pin_keyword_match:
+                                parts = re.findall(r'\d+', pin_keyword_match.group(1))
+                                if len(parts) >= 5:
+                                    pin_text = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}.{parts[4]}"
+                            else:
+                                # Fallback: Strict format ANYWHERE (must have separators)
+                                alt_pin = re.search(r'\b(\d{3})[-\.\s]+(\d{2})[-\.\s]+(\d{4})[-\.\s]+(\d{3})[-\.\s]+(\d{2})\b', raw_text)
+                                if alt_pin:
+                                    pin_text = f"{alt_pin.group(1)}.{alt_pin.group(2)}.{alt_pin.group(3)}.{alt_pin.group(4)}.{alt_pin.group(5)}"
+                                else:
+                                    # Fallback 2: Looser keyword search
+                                    loose_pin = re.search(r'PROPERTY\s*INDEX[^\d]*([\d\-\.\s]+)', raw_text, re.IGNORECASE)
+                                    if loose_pin:
+                                        pin_cleaned = re.sub(r'[^\d]', '.', loose_pin.group(1))
+                                        pin_text = re.sub(r'\.+', '.', pin_cleaned).strip('.')
+                            
+                            if td_text or pin_text:
+                                if td_text:
+                                    pyautogui.write(td_text, interval=0.01)
+                                time.sleep(0.1)
+                                pyautogui.press('tab')
+                                time.sleep(0.1)
+                                if pin_text:
+                                    pyautogui.write(pin_text, interval=0.01)
+                            else:
+                                print("S-box OCR: NO TD or PIN match found in text ->", repr(raw_text))
+                    else:
+                        pyautogui.hotkey('ctrl', 'v')
                     time.sleep(0.1)
                 except Exception as e:
                     print('S-box paste error:', e)
