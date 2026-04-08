@@ -1775,17 +1775,49 @@ class CopyBoxApp:
                                     if loose_pin:
                                         pin_cleaned = re.sub(r'[^\d]', '.', loose_pin.group(1))
                                         pin_text = re.sub(r'\.+', '.', pin_cleaned).strip('.')
-                            
-                            if td_text or pin_text:
-                                if td_text:
-                                    pyautogui.write(td_text, interval=0.01)
-                                time.sleep(0.1)
-                                pyautogui.press('tab')
-                                time.sleep(0.1)
-                                if pin_text:
-                                    pyautogui.write(pin_text, interval=0.01)
+                            # 3. Extract Owner (Declarant Name)
+                            owner_text = ""
+                            owner_match = re.search(r'Owner[\s_:]*([A-Za-z\s\,\.\/\(\)\-]+?)(?:\s{2,}|Telephone|Administrator|Address|\n|$)', raw_text, re.IGNORECASE)
+                            if owner_match:
+                                owner_text = owner_match.group(1).strip()
+
+                            # 3. Extract Owner (Declarant Name) - Specific to Document Label
+                            owner_text = ""
+                            # We only look for "Owner" to avoid catching browser labels like "Declarant Name"
+                            owner_match = re.search(r'Owner[\s_:\.]*([A-Z][A-Z\s\,\.\/\(\)\-]{3,})', raw_text)
+                            if owner_match:
+                                owner_text = owner_match.group(1).strip()
                             else:
-                                print("S-box OCR: NO TD or PIN match found in text ->", repr(raw_text))
+                                # Fallback with ignorecase if exact uppercase fails
+                                alt_owner = re.search(r'Owner[\s_:\.]*([A-Za-z\s\,\.\/\(\)\-]{3,})', raw_text, re.IGNORECASE)
+                                if alt_owner:
+                                    owner_text = alt_owner.group(1).strip()
+                            
+                            # 4. Fill All 3 Sequence (Owner -> TAB -> TD -> TAB -> PIN)
+                            # This is the "Automated" mode that worked earlier but with better data.
+                            if owner_text or td_text or pin_text:
+                                print(f"AUTOFULL: OWNR='{owner_text}', TD='{td_text}', PIN='{pin_text}'")
+                                if owner_text:
+                                    pyautogui.write(owner_text, interval=0.005)
+                                
+                                time.sleep(0.12)
+                                pyautogui.press('tab')
+                                time.sleep(0.12)
+                                
+                                if td_text:
+                                    pyautogui.write(td_text, interval=0.005)
+                                
+                                time.sleep(0.12)
+                                pyautogui.press('tab')
+                                time.sleep(0.12)
+                                
+                                if pin_text:
+                                    pyautogui.write(pin_text, interval=0.005)
+                            else:
+                                print("S-box OCR: NO matches found. Falling back to clipboard.")
+                                pyautogui.hotkey('ctrl', 'v')
+                        else:
+                            print("S-box OCR: Caching background text...")
                     else:
                         pyautogui.hotkey('ctrl', 'v')
                     time.sleep(0.1)
