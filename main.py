@@ -1584,17 +1584,123 @@ class CopyBoxApp:
 
         control_btn.bind('<Button-1>', toggle_control)
 
+        def create_scan_overlay(pd):
+            if pd.get('scan_overlay') and pd['scan_overlay'].winfo_exists():
+                return
+            BG = '#F2F2F2'  # This exact color becomes transparent/click-through
+            RED = '#FF2222'
+            overlay = tk.Toplevel(self.root)
+            overlay.overrideredirect(True)
+            overlay.attributes('-topmost', True)
+            overlay.attributes('-transparentcolor', BG)
+            overlay.configure(bg=BG)
+            pd['scan_overlay'] = overlay
+            win_w, win_h = 350, 110
+            sx = self.root.winfo_x() + 50
+            sy = self.root.winfo_y() + self.root.winfo_height() + 10
+            overlay.geometry(f'{win_w}x{win_h}+{sx}+{sy}')
+
+            BAR_H = 18
+            CORNER = 14
+            drag_data = {'ox': 0, 'oy': 0, 'dragging': False}
+            resize_data = {'active': False, 'sx': 0, 'sy': 0, 'sw': 0, 'sh': 0}
+
+            canvas = tk.Canvas(overlay, bg=BG, highlightthickness=0)
+            canvas.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+
+            def redraw(*args):
+                canvas.delete('all')
+                w = overlay.winfo_width()
+                h = overlay.winfo_height()
+                # Top drag bar
+                canvas.create_rectangle(0, 0, w, BAR_H, fill=RED, outline='', tags='dragbar')
+                canvas.create_text(w // 2, BAR_H // 2, text='SCAN AREA  (drag me)', fill='white',
+                                   font=('Arial', 8, 'bold'), tags='dragbar')
+                # Close X
+                canvas.create_rectangle(w - BAR_H, 0, w, BAR_H, fill='#CC0000', outline='', tags='close_btn')
+                canvas.create_text(w - BAR_H // 2, BAR_H // 2, text='✕', fill='white',
+                                   font=('Arial', 8, 'bold'), tags='close_btn')
+                # Dashed red border (below bar)
+                canvas.create_rectangle(1, BAR_H, w - 1, h - 1,
+                                        outline=RED, width=2, dash=(7, 4))
+                # Resize corner
+                canvas.create_rectangle(w - CORNER, h - CORNER, w, h,
+                                        fill=RED, outline='', tags='resize_hdl')
+                canvas.create_text(w - CORNER // 2, h - CORNER // 2, text='⟋',
+                                   fill='white', font=('Arial', 7), tags='resize_hdl')
+
+            overlay.bind('<Configure>', redraw)
+            overlay.after(20, redraw)
+
+            def on_press(event):
+                if event.y <= BAR_H and event.x < overlay.winfo_width() - BAR_H:
+                    drag_data['dragging'] = True
+                    drag_data['ox'] = event.x_root - overlay.winfo_x()
+                    drag_data['oy'] = event.y_root - overlay.winfo_y()
+                    resize_data['active'] = False
+                else:
+                    drag_data['dragging'] = False
+                    # check resize corner
+                    w = overlay.winfo_width()
+                    h = overlay.winfo_height()
+                    if event.x >= w - CORNER and event.y >= h - CORNER:
+                        resize_data['active'] = True
+                        resize_data['sx'] = event.x_root
+                        resize_data['sy'] = event.y_root
+                        resize_data['sw'] = w
+                        resize_data['sh'] = h
+
+            def on_drag(event):
+                if drag_data['dragging']:
+                    nx = event.x_root - drag_data['ox']
+                    ny = event.y_root - drag_data['oy']
+                    overlay.geometry(f'+{nx}+{ny}')
+                elif resize_data['active']:
+                    nw = max(150, resize_data['sw'] + event.x_root - resize_data['sx'])
+                    nh = max(60, resize_data['sh'] + event.y_root - resize_data['sy'])
+                    overlay.geometry(f'{nw}x{nh}')
+
+            def on_release(event):
+                drag_data['dragging'] = False
+                resize_data['active'] = False
+
+            def on_click(event):
+                w = overlay.winfo_width()
+                # Close button
+                if event.y <= BAR_H and event.x >= w - BAR_H:
+                    destroy_scan_overlay(pd)
+                    pd['is_active'] = False
+                    active_btn_frame.config(bg='#2196F3')
+                    active_btn.config(bg='#2196F3')
+                    stop_s_listeners(pd)
+
+            canvas.bind('<Button-1>', on_press)
+            canvas.bind('<B1-Motion>', on_drag)
+            canvas.bind('<ButtonRelease-1>', on_release)
+            canvas.bind('<Button-1>', on_click, add='+')
+
+        def destroy_scan_overlay(pd):
+            ov = pd.get('scan_overlay')
+            if ov:
+                try:
+                    ov.destroy()
+                except Exception:
+                    pass
+                pd['scan_overlay'] = None
+
         def toggle_active(event, btn=active_btn, frm=active_btn_frame, pd=pin_data):
             if not pd['is_active']:
                 pd['is_active'] = True
                 frm.config(bg='#FF3333')
                 btn.config(bg='#FF3333')
                 start_s_listeners(pd)
+                create_scan_overlay(pd)
             else:
                 pd['is_active'] = False
                 frm.config(bg='#2196F3')
                 btn.config(bg='#2196F3')
                 stop_s_listeners(pd)
+                destroy_scan_overlay(pd)
 
         active_btn.bind('<Button-1>', toggle_active)
 
@@ -1677,6 +1783,7 @@ class CopyBoxApp:
 
         def del_box(event, b_frame=box_frame, pd=pin_data):
             stop_s_listeners(pd)
+            destroy_scan_overlay(pd)
             b_frame.destroy()
             self.boxes = [(bf, p) for bf, p in self.boxes if bf != b_frame]
             self.update_geometry()
