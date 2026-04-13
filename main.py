@@ -11,14 +11,14 @@ from pynput import mouse, keyboard
 
 try:
     import pytesseract
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageTk, ImageEnhance
     # Setting the path for Tesseract engine
     tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
     if os.path.exists(tesseract_path):
         pytesseract.pytesseract.tesseract_cmd = tesseract_path
 except ImportError:
     pytesseract = None
-    from PIL import Image
+    from PIL import Image, ImageEnhance
     try:
         from PIL import ImageTk
     except:
@@ -238,6 +238,93 @@ class CopyBoxApp:
         
         self.boxes = []  # list of (box_frame, pin_data) tuples
         self.add_box()
+        
+    def preprocess_image_for_ocr(self, screenshot):
+        """Scale and enhance image for better OCR results."""
+        try:
+            # Upscale 3x for clearer small text
+            w, h = screenshot.size
+            img = screenshot.resize((w*3, h*3), Image.Resampling.LANCZOS)
+            img = img.convert('L') # Grayscale
+            # Boost contrast
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(2.0)
+            return img
+        except Exception as e:
+            print(f"Preprocessing error: {e}")
+            return screenshot
+
+    def perform_ocr_extraction(self, raw_text, mode):
+        """Centralized OCR extraction logic with noise filtering and form label exclusion."""
+        if not raw_text: return ""
+        
+        # 1. Noise Filtering (Filter out IP addresses, URLs, and common browser noise)
+        # Filter IPs (like 192.168.x.x)
+        clean_text = re.sub(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '', raw_text)
+        # Filter common placeholders/labels and document headers
+        form_labels = [
+            'DECLARANT NAME', 'TAX DECLARATION #', 'PIN', 'MUNICIPALITY', 
+            'BARANGAY', 'CLASSIFICATION', 'AREA', 'MARKET VALUE', 'ASSESSED VALUE',
+            'REPUBLIC OF THE PHILIPPINES', 'MISAMIS ORIENTAL', 'PROVINCE OF',
+            'TAX DECLARATION OF REAL PROPERTY', 'KIND OF PROPERTY ASSESSED'
+        ]
+        
+        if mode == 'TD':
+            # ... (TD logic remains same)
+            td_match = re.search(r'(?:TD|TAX\s*DECLARATION)\s*NO\.?[^\d]*(\d{2}[-\.\s]+\d{8,14})', clean_text, re.IGNORECASE)
+            if td_match:
+                return re.sub(r'\D', '', td_match.group(1))
+            pattern_match = re.search(r'\b(\d{2})[-\.\s]+(\d{10,14})\b', clean_text)
+            if pattern_match:
+                return pattern_match.group(1) + pattern_match.group(2)
+            all_digits = re.findall(r'\b\d{10,14}\b', clean_text)
+            return all_digits[0] if all_digits else ""
+            
+        elif mode == 'PIN':
+            # ... (PIN logic remains same)
+            pin_match = re.search(r'(?:PIN|PROPERTY\s*(?:INDEX|IDENTIFICATION))\s*[^\d]*(\d{3}[-\.\s]+\d{2}[-\.\s]+\d{4}[-\.\s]+\d{3}[-\.\s]+\d{2})', clean_text, re.IGNORECASE)
+            if pin_match:
+                p = re.findall(r'\d+', pin_match.group(1))
+                if len(p) >= 5: return f"{p[0]}.{p[1]}.{p[2]}.{p[3]}.{p[4]}"
+            alt_pin = re.search(r'\b(\d{3})[-\.\s]+(\d{2})[-\.\s]+(\d{4})[-\.\s]+(\d{3})[-\.\s]+(\d{2})\b', clean_text)
+            if alt_pin: return f"{alt_pin.group(1)}.{alt_pin.group(2)}.{alt_pin.group(3)}.{alt_pin.group(4)}.{alt_pin.group(5)}"
+            digits = "".join(re.findall(r'\d+', clean_text))
+            if len(digits) >= 14:
+                d = digits[:14]
+                return f"{d[0:3]}.{d[3:5]}.{d[5:9]}.{d[9:12]}.{d[12:14]}"
+            return ""
+            
+        elif mode == 'NAME':
+            # 1. Primary Priority: Specifically look for "Owner" keyword from the document content
+            # These documents almost always use "Owner:"
+            owner_match = re.search(r'Owner\s*[:\.]*\s*([A-Z][A-Z\s\,\.\/\(\)\-]{4,})', clean_text, re.IGNORECASE)
+            if owner_match:
+                name = owner_match.group(1).strip().split('\n')[0].strip()
+                name = re.split(r'(?i)\s+(?:Address|TIN|Tel|Land|Location|Municipality|Barangay)', name)[0].strip()
+                if not any(lbl in name.upper() for lbl in form_labels):
+                    return name.strip(',').strip()
+
+            # 2. Secondary Priority: Search for lines with the Surname, Firstname comma structure
+            lines = [l.strip() for l in clean_text.split('\n') if l.strip()]
+            for line in lines:
+                # Filter out headers and labels
+                if any(lbl in line.upper() for lbl in form_labels): continue
+                # Look for uppercase SURNAME, FIRSTNAME format
+                if re.search(r'^[A-Z]{2,},\s*[A-Z\s\.]{2,}', line):
+                    name = re.split(r'(?i)\s+(?:Address|TIN|Tel|Land|Location|Municipality|Barangay)', line)[0].strip()
+                    return name.strip(',').strip()
+
+            # 3. Tertiary: Fallback to "Declarant Name" but be very careful of noise
+            declarant_match = re.search(r'Declarant\s*Name\s*[:\.]*\s*([A-Z][A-Z\s\,\.\/\(\)\-]{4,})', clean_text, re.IGNORECASE)
+            if declarant_match:
+                name = declarant_match.group(1).strip().split('\n')[0].strip()
+                name = re.split(r'(?i)\s+(?:Address|TIN|Tel|Land|Location|Municipality|Barangay)', name)[0].strip()
+                if not any(lbl in name.upper() for lbl in form_labels) and len(name) > 3:
+                    return name.strip(',').strip()
+            
+            return ""
+            
+        return raw_text.strip()
         
     def add_box(self):
         # Create search container for the row
@@ -510,18 +597,12 @@ class CopyBoxApp:
                         screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
                         
                         if pytesseract:
-                            # Perform OCR
-                            raw_text = pytesseract.image_to_string(screenshot)
+                            # Perform OCR with preprocessing
+                            raw_text = pytesseract.image_to_string(self.preprocess_image_for_ocr(screenshot))
                             
-                            # Clean text based on mode
+                            # Clean text based on mode using centralized helper
                             mode = pd.get('scan_mode', 'TD')
-                            if mode == 'TD':
-                                # Keep only digits
-                                scanned_text = "".join(re.findall(r'\d+', raw_text))
-                            else: # PIN mode
-                                # convert dashes to dots then keep numbers and dots
-                                temp_text = raw_text.replace('-', '.')
-                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                            scanned_text = self.perform_ocr_extraction(raw_text, mode)
                         else:
                             scanned_text = "ERROR: Install pytesseract"
                             
@@ -625,13 +706,9 @@ class CopyBoxApp:
                         screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
                         scanned_text = ""
                         if pytesseract:
-                            raw_text = pytesseract.image_to_string(screenshot)
+                            raw_text = pytesseract.image_to_string(self.preprocess_image_for_ocr(screenshot))
                             mode = pd.get('scan_mode', 'TD')
-                            if mode == 'TD':
-                                scanned_text = "".join(re.findall(r'\d+', raw_text))
-                            else:
-                                temp_text = raw_text.replace('-', '.')
-                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                            scanned_text = self.perform_ocr_extraction(raw_text, mode)
                         
                         pyautogui.click(tx, ty)
                         time.sleep(0.15)
@@ -1019,13 +1096,9 @@ class CopyBoxApp:
                         screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
                         scanned_text = ""
                         if pytesseract:
-                            raw_text = pytesseract.image_to_string(screenshot)
+                            raw_text = pytesseract.image_to_string(self.preprocess_image_for_ocr(screenshot))
                             mode = pd.get('scan_mode', 'TD')
-                            if mode == 'TD':
-                                scanned_text = "".join(re.findall(r'\d+', raw_text))
-                            else:
-                                temp_text = raw_text.replace('-', '.')
-                                scanned_text = "".join(re.findall(r'[\d.]+', temp_text))
+                            scanned_text = self.perform_ocr_extraction(raw_text, mode)
                         
                         pyautogui.click(tx, ty)
                         time.sleep(0.15)
@@ -1518,6 +1591,9 @@ class CopyBoxApp:
             'is_scan_box': True,
             'scan_win': None,
             'scan_mode': 'TD',
+            'owner_target': {'x': None, 'y': None, 'win': None},
+            'td_target': {'x': None, 'y': None, 'win': None},
+            'pin_target': {'x': None, 'y': None, 'win': None}
         }
 
         # Color bar
@@ -1528,6 +1604,65 @@ class CopyBoxApp:
         s_icon = tk.Label(box_frame, text='S', bg='white', fg=box_color,
                           font=('Arial', 14, 'bold'))
         s_icon.pack(side='left', padx=(5, 8))
+
+        # --- NEW: Specific Field Pins for S-Box ---
+        def start_s_target(pd, field_name):
+            target = pd[f'{field_name.lower()}_target']
+            # If exists, destroy
+            if target['win'] and target['win'].winfo_exists():
+                target['win'].destroy()
+                target['win'] = None
+                target['x'] = None
+                target['y'] = None
+                pd[f'{field_name.lower()}_btn'].config(fg='#808080')
+                return
+
+            pd[f'{field_name.lower()}_btn'].config(fg=pd['color'])
+            
+            # Create floating pin specialized for S-box field
+            fwin = tk.Toplevel(self.root)
+            fwin.overrideredirect(True)
+            fwin.attributes('-topmost', True)
+            fwin.attributes('-alpha', 0.8)
+            fwin.wm_attributes('-transparentcolor', '#F0F0F0')
+            target['win'] = fwin
+            
+            win_w, win_h = 45, 60
+            fwin.geometry(f"{win_w}x{win_h}+{self.root.winfo_screenwidth()//2}+{self.root.winfo_screenheight()//2}")
+            
+            canvas = tk.Canvas(fwin, bg='#F0F0F0', highlightthickness=0, cursor='fleur')
+            canvas.pack(fill='both', expand=True)
+            
+            # Draw target icon
+            canvas.create_text(win_w//2, 10, text=field_name, font=('Arial', 7, 'bold'), fill=pd['color'])
+            canvas.create_line(win_w//2, 18, win_w//2, win_h-10, fill=pd['color'], width=2, dash=(2, 2))
+            canvas.create_oval(win_w//2-5, win_h-10, win_w//2+5, win_h, fill=pd['color'], outline='#333333')
+            
+            def on_drag(e):
+                nx, ny = e.x_root - win_w//2, e.y_root - win_h//2
+                fwin.geometry(f"+{nx}+{ny}")
+                target['x'], target['y'] = nx + win_w//2, ny + win_h - 5
+
+            canvas.bind('<B1-Motion>', on_drag)
+            canvas.bind('<Button-3>', lambda e: start_s_target(pd, field_name)) # Right click to clear
+            
+            # Set initial position
+            target['x'], target['y'] = fwin.winfo_x() + win_w//2, fwin.winfo_y() + win_h - 5
+
+        owner_target_btn = tk.Label(box_frame, text="📌OWNER", bg='white', fg='#808080', font=('Arial', 9, 'bold'), cursor='hand2')
+        owner_target_btn.pack(side='left', padx=2)
+        owner_target_btn.bind('<Button-1>', lambda e: start_s_target(pin_data, "OWNER"))
+        pin_data['owner_target_btn'] = owner_target_btn
+
+        td_target_btn = tk.Label(box_frame, text="📌TD", bg='white', fg='#808080', font=('Arial', 9, 'bold'), cursor='hand2')
+        td_target_btn.pack(side='left', padx=2)
+        td_target_btn.bind('<Button-1>', lambda e: start_s_target(pin_data, "TD"))
+        pin_data['td_target_btn'] = td_target_btn
+
+        pin_target_btn = tk.Label(box_frame, text="📌PIN", bg='white', fg='#808080', font=('Arial', 9, 'bold'), cursor='hand2')
+        pin_target_btn.pack(side='left', padx=2)
+        pin_target_btn.bind('<Button-1>', lambda e: start_s_target(pin_data, "PIN"))
+        pin_data['pin_target_btn'] = pin_target_btn
 
         # Separator
         tk.Frame(box_frame, width=1, bg='#E0E0E0').pack(side='left', fill='y', padx=(0, 8))
@@ -1595,7 +1730,8 @@ class CopyBoxApp:
             overlay.attributes('-transparentcolor', BG)
             overlay.configure(bg=BG)
             pd['scan_overlay'] = overlay
-            win_w, win_h = 350, 110
+            # Increase default size to cover more fields (TD and PIN)
+            win_w, win_h = 600, 150
             sx = self.root.winfo_x() + 50
             sy = self.root.winfo_y() + self.root.winfo_height() + 10
             overlay.geometry(f'{win_w}x{win_h}+{sx}+{sy}')
@@ -1704,12 +1840,17 @@ class CopyBoxApp:
 
         active_btn.bind('<Button-1>', toggle_active)
 
-        def perform_s_paste(x, y):
+        def perform_s_paste(x, y, is_key=False):
             def task():
                 try:
                     time.sleep(0.1)
-                    cursor_x, cursor_y = pyautogui.position()
-                    pyautogui.click(cursor_x, cursor_y)
+                    if is_key:
+                        # If triggered by keyboard, delete the trigger key first (like '-')
+                        pyautogui.press('backspace')
+                    else:
+                        # If triggered by mouse, click at the current position to focus the field
+                        cursor_x, cursor_y = pyautogui.position()
+                        pyautogui.click(cursor_x, cursor_y)
                     time.sleep(0.1)
                     
                     ov = pin_data.get('scan_overlay')
@@ -1723,91 +1864,61 @@ class CopyBoxApp:
                         if sw > 0 and sh > 0:
                             screenshot = pyautogui.screenshot(region=(sx, sy, sw, sh))
                             
-                            # Preprocess image for much better OCR accuracy on small text
-                            if 'Image' in globals():
-                                # upscale 3x and convert to grayscale
-                                try:
-                                    img = screenshot.resize((sw*3, sh*3), Image.Resampling.LANCZOS)
-                                    img = img.convert('L')
-                                    raw_text = pytesseract.image_to_string(img)
-                                except Exception as e:
-                                    print("Image scaling error:", e)
-                                    raw_text = pytesseract.image_to_string(screenshot)
-                            else:
-                                raw_text = pytesseract.image_to_string(screenshot)
+                            # Preprocess image for much better OCR accuracy
+                            processed_img = self.preprocess_image_for_ocr(screenshot)
+                            raw_text = pytesseract.image_to_string(processed_img, config='--psm 6')
                             
                             print("S-BOX DEBUG OCR RAW ==>")
                             print(repr(raw_text))
                             
-                            # 1. Extract TD
-                            td_text = ""
-                            # Primary: Look for keyword followed by digits with a separator
-                            td_keyword_match = re.search(r'TD/?[A-Z]*\s*NO\.?[^\d]*(\d{2}[-\.\s]+\d{10,14})', raw_text, re.IGNORECASE)
-                            if td_keyword_match:
-                                td_text = re.sub(r'\D', '', td_keyword_match.group(1))
-                            else:
-                                # Fallback: Strict structural pattern ANYWHERE, MUST have separator to avoid typed fields
-                                alt_td = re.search(r'\b(\d{2})[-\.\s]+(\d{10,14})\b', raw_text)
-                                if alt_td:
-                                    td_text = alt_td.group(1) + alt_td.group(2)
-                                else:
-                                    # Fallback 2: Looser keyword search
-                                    loose_td = re.search(r'TD/?[A-Z]*\s*NO\.?[^\d]*([\d\-]+)', raw_text, re.IGNORECASE)
-                                    if loose_td:
-                                        td_text = re.sub(r'\D', '', loose_td.group(1))
-
-                            # 2. Extract PIN
-                            pin_text = ""
-                            # Primary: Look for keyword followed by strict 5-segment pattern
-                            pin_keyword_match = re.search(r'PROPERTY\s*INDEX[^\d]*(\d{3}[-\.\s]+\d{2}[-\.\s]+\d{4}[-\.\s]+\d{3}[-\.\s]+\d{2})', raw_text, re.IGNORECASE)
-                            if pin_keyword_match:
-                                parts = re.findall(r'\d+', pin_keyword_match.group(1))
-                                if len(parts) >= 5:
-                                    pin_text = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}.{parts[4]}"
-                            else:
-                                # Fallback: Strict format ANYWHERE (must have separators)
-                                alt_pin = re.search(r'\b(\d{3})[-\.\s]+(\d{2})[-\.\s]+(\d{4})[-\.\s]+(\d{3})[-\.\s]+(\d{2})\b', raw_text)
-                                if alt_pin:
-                                    pin_text = f"{alt_pin.group(1)}.{alt_pin.group(2)}.{alt_pin.group(3)}.{alt_pin.group(4)}.{alt_pin.group(5)}"
-                                else:
-                                    # Fallback 2: Looser keyword search
-                                    loose_pin = re.search(r'PROPERTY\s*INDEX[^\d]*([\d\-\.\s]+)', raw_text, re.IGNORECASE)
-                                    if loose_pin:
-                                        pin_cleaned = re.sub(r'[^\d]', '.', loose_pin.group(1))
-                                        pin_text = re.sub(r'\.+', '.', pin_cleaned).strip('.')
-                            # 3. Extract Owner (Declarant Name) - Specific to Document Label
-                            owner_text = ""
-                            # We only look for "Owner" to avoid catching browser labels like "Declarant Name"
-                            owner_match = re.search(r'Owner[\s_:\.]*([A-Z][A-Z\s\,\.\/\(\)\-]{3,})', raw_text)
-                            if owner_match:
-                                owner_text = owner_match.group(1).strip()
-                            else:
-                                # Fallback with ignorecase if exact uppercase fails
-                                alt_owner = re.search(r'Owner[\s_:\.]*([A-Za-z\s\,\.\/\(\)\-]{3,})', raw_text, re.IGNORECASE)
-                                if alt_owner:
-                                    owner_text = alt_owner.group(1).strip()
+                            # 1. Extract TD (Tax Declaration #)
+                            td_text = self.perform_ocr_extraction(raw_text, 'TD')
                             
-                            # 4. Fill All 3 Sequence (Owner -> TAB -> TD -> TAB -> PIN)
+                            # 2. Extract PIN (Property Identification Number)
+                            pin_text = self.perform_ocr_extraction(raw_text, 'PIN')
+
+                            # 3. Extract Owner (Declarant Name)
+                            owner_text = self.perform_ocr_extraction(raw_text, 'NAME')
+                            
+                            print(f"DEBUG OCR FOUND: TD='{td_text}', PIN='{pin_text}', OWNER='{owner_text}'")
+                            
+                            # 4. Fill FORM Sequence (Owner -> TD -> PIN)
                             if owner_text or td_text or pin_text:
-                                print(f"AUTOFULL: OWNR='{owner_text}', TD='{td_text}', PIN='{pin_text}'")
+                                print(f"AUTOFULL: OWNER='{owner_text}', TD='{td_text}', PIN='{pin_text}'")
+                                
+                                # 1. Process Owner Field
                                 if owner_text:
-                                    pyautogui.write(owner_text, interval=0.005)
-                                
-                                time.sleep(0.12)
-                                pyautogui.press('tab')
-                                time.sleep(0.12)
-                                
+                                    if pin_data.get('owner_target') and pin_data['owner_target']['x'] is not None:
+                                        pyautogui.click(pin_data['owner_target']['x'], pin_data['owner_target']['y'])
+                                        time.sleep(0.1)
+                                        pyautogui.write(owner_text, interval=0.01)
+
+                                # 2. Process TD Field
                                 if td_text:
-                                    pyautogui.write(td_text, interval=0.005)
-                                
-                                time.sleep(0.12)
-                                pyautogui.press('tab')
-                                time.sleep(0.12)
-                                
+                                    if pin_data.get('td_target') and pin_data['td_target']['x'] is not None:
+                                        # Go directly to TD field if pinned
+                                        pyautogui.click(pin_data['td_target']['x'], pin_data['td_target']['y'])
+                                        time.sleep(0.1)
+                                    else:
+                                        # Fallback: TAB into field (assuming focused on Name/Owner)
+                                        pyautogui.press('tab')
+                                        time.sleep(0.2)
+                                    pyautogui.write(td_text, interval=0.01)
+
+                                # 3. Process PIN Field
                                 if pin_text:
-                                    pyautogui.write(pin_text, interval=0.005)
+                                    if pin_data.get('pin_target') and pin_data['pin_target']['x'] is not None:
+                                        # Go directly to PIN field if pinned
+                                        pyautogui.click(pin_data['pin_target']['x'], pin_data['pin_target']['y'])
+                                        time.sleep(0.1)
+                                    else:
+                                        # Fallback: TAB into field (assuming in TD field)
+                                        time.sleep(0.2)
+                                        pyautogui.press('tab')
+                                        time.sleep(0.2)
+                                    pyautogui.write(pin_text, interval=0.01)
                             else:
-                                print("S-box OCR: NO matches found. Falling back to clipboard.")
+                                print("S-box OCR: NO FORM data found. Falling back to clipboard.")
                                 pyautogui.hotkey('ctrl', 'v')
                     else:
                         pyautogui.hotkey('ctrl', 'v')
@@ -1821,11 +1932,11 @@ class CopyBoxApp:
             trigger = str(pin_data.get('control_mode', '')).lower()
             if not pressed: return
             if trigger in ['right click', 'right'] and button == mouse.Button.right:
-                perform_s_paste(x, y)
+                perform_s_paste(x, y, is_key=False)
             elif trigger in ['middle click', 'middle'] and button == mouse.Button.middle:
-                perform_s_paste(x, y)
+                perform_s_paste(x, y, is_key=False)
             elif trigger in ['left click', 'left'] and button == mouse.Button.left:
-                perform_s_paste(x, y)
+                perform_s_paste(x, y, is_key=False)
 
         current_s_keys = set()
         def on_s_key_press(key):
@@ -1833,7 +1944,10 @@ class CopyBoxApp:
             trigger = str(pin_data.get('control_mode', '')).lower().strip()
             if 'click' in trigger or trigger in ['right', 'left', 'middle']: return
             try: k_char = key.char.lower()
-            except AttributeError: k_char = str(key).lower().replace('key.', '')
+            except AttributeError: 
+                k_char = str(key).lower().replace('key.', '')
+                if k_char == 'minus' or k_char == 'dash' or k_char == 'hyphen':
+                    k_char = '-'
             current_s_keys.add(k_char)
             modifiers = []
             if any('ctrl' in k for k in current_s_keys): modifiers.append('ctrl')
@@ -1841,16 +1955,19 @@ class CopyBoxApp:
             if any('alt' in k for k in current_s_keys): modifiers.append('alt')
             regular = [k for k in current_s_keys if not any(m in k for m in ['ctrl','shift','alt','cmd'])]
             current_state = modifiers + regular
+            
             parts = trigger.replace('+', ' ').split()
             trigger_state = []
             for p in parts:
                 if p in ['ctrl', 'control']: trigger_state.append('ctrl')
                 elif p == 'shift': trigger_state.append('shift')
                 elif p == 'alt': trigger_state.append('alt')
+                elif p == '-' or p == 'minus': trigger_state.append('-') # Standardize hyphen
                 else: trigger_state.append(p)
+            
             if len(trigger_state) > 0 and set(trigger_state) == set(current_state):
                 x, y = pyautogui.position()
-                perform_s_paste(x, y)
+                perform_s_paste(x, y, is_key=True)
 
         def on_s_key_release(key):
             try: k_char = key.char.lower()
@@ -2330,7 +2447,7 @@ class CopyBoxApp:
             
         mode_var.trace_add("write", update_mode)
         
-        mode_dropdown = tk.OptionMenu(content_frame, mode_var, "TD", "PIN")
+        mode_dropdown = tk.OptionMenu(content_frame, mode_var, "TD", "PIN", "NAME")
         mode_dropdown.config(
             bg=box_color, 
             fg='white', 
